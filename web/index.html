@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Boox Note Optimizer</title>
+    <script>
+        if (typeof WebAssembly !== "object" || !/Chrome|Safari|Firefox|Edge/i.test(navigator.userAgent)) {
+            document.write('<div style="padding:40px;text-align:center;font-family:sans-serif;background:#fff;position:absolute;inset:0;z-index:9999;display:flex;flex-direction:column;justify-content:center;"><h2>Browser Not Supported</h2><p>Please use a modern version of Chrome, Safari, or Firefox with WebAssembly support to run this engine.</p></div>');
+            window.stop();
+        }
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body { overscroll-behavior: none; }
+        .will-change-transform { will-change: transform; transform-origin: top left; }
+        
+        input[type=range] { -webkit-appearance: none; background: transparent; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 6px; background: #e5e7eb; border-radius: 4px; }
+        input[type=range]::-webkit-slider-thumb { 
+            -webkit-appearance: none; 
+            height: 20px; 
+            width: 20px; 
+            border-radius: 50%; 
+            background: #000; 
+            margin-top: -7px; 
+            cursor: pointer; 
+            transition: transform 0.1s; 
+        }
+        input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.1); }
+        
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; border: 2px solid transparent; background-clip: padding-box; }
+        
+        details > summary::-webkit-details-marker { display: none; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans antialiased h-[100dvh] overflow-hidden flex flex-col">
+
+    <header class="flex-shrink-0 flex justify-between items-center px-4 md:px-6 py-3 md:py-4 bg-white border-b border-gray-200 z-50 shadow-sm relative">
+        <div class="flex items-center gap-3 md:gap-4">
+            <div>
+                <h1 class="text-xl md:text-2xl font-bold tracking-tight text-gray-900">Optimizer for Boox Notes</h1>
+                <p class="text-[9px] md:text-[11px] text-gray-500 mt-0.5 uppercase font-bold tracking-wider">Client-side execution<span class="hidden sm:inline"> - fully private, no data leaves your device.</span></p>
+            </div>
+        </div>
+        
+        <div class="flex items-center gap-3 sm:gap-4">
+            <a href="https://github.com/nrontsis/boox-note-optimizer" target="_blank" rel="noopener noreferrer" class="flex items-center gap-1.5 text-sm font-semibold text-gray-600 hover:text-black transition hidden sm:flex">
+                <svg class="w-5 h-5 shrink-0" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clip-rule="evenodd"></path></svg>
+                GitHub
+            </a>
+            <div class="w-px h-4 bg-gray-300 hidden sm:block"></div>
+            <button onclick="openModal('modalExplain')" class="text-sm font-semibold text-gray-600 hover:text-black transition hidden sm:block">How it Works</button>
+            <div class="w-px h-4 bg-gray-300 hidden sm:block"></div>
+            <button onclick="openModal('modalLicense')" class="text-sm font-semibold text-gray-600 hover:text-black transition hidden sm:block">License & Disclaimer</button>
+            <div class="w-px h-6 bg-gray-200 hidden sm:block"></div>
+
+            <label id="headerUploadBtn" class="hidden px-4 md:px-5 py-2 md:py-2.5 bg-black text-white rounded-lg md:rounded-xl shadow-sm text-xs md:text-sm font-bold cursor-pointer hover:bg-gray-800 transition whitespace-nowrap">
+                Load New File
+                <input type="file" id="headerFileInput" accept=".note,*/*" class="hidden">
+            </label>
+        </div>
+    </header>
+
+    <div class="flex-1 flex w-full p-3 md:p-6 gap-3 md:gap-6 relative flex-col md:flex-row overflow-y-auto md:overflow-hidden custom-scrollbar">
+        
+        <div id="sidebar" class="hidden w-full md:w-[340px] shrink-0 bg-white border border-gray-200 rounded-xl md:rounded-2xl flex-col shadow-sm z-30 md:overflow-y-auto h-auto md:h-full custom-scrollbar">
+            
+            <div class="p-4 md:p-5 border-b border-gray-100 flex flex-col gap-4 md:gap-5 shrink-0">
+                <button id="btnDlNote" class="w-full py-3 md:py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm md:text-[15px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed tracking-wide">
+                    Download Optimized .note
+                </button>
+                
+                <div class="flex flex-col gap-2">
+                    <span class="text-[10px] md:text-[11px] font-bold text-gray-400 uppercase tracking-widest">Export Visuals</span>
+                    <div class="grid grid-cols-2 gap-2 md:gap-3">
+                        <button id="btnOptPdf" class="py-2.5 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed">PDF</button>
+                        <button id="btnOptJpeg" class="py-2.5 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed">JPEG</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-4 md:p-5 border-b border-gray-100 shrink-0">
+                <h3 class="font-bold text-gray-900 text-[14px] md:text-[15px] mb-3 border-b border-gray-100 pb-2">Optimization Results</h3>
+                <div id="optResults" class="text-sm text-gray-600">
+                    <span class="animate-pulse">Waiting for file...</span>
+                </div>
+            </div>
+
+            <div class="p-4 md:p-5 shrink-0">
+                <details class="group">
+                    <summary class="font-bold text-gray-900 text-sm md:text-[15px] cursor-pointer outline-none flex justify-between items-center select-none py-1">
+                        Advanced Settings
+                        <svg class="w-4 h-4 text-gray-400 group-open:rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </summary>
+                    <div class="pt-4 md:pt-5 space-y-5">
+                        <p class="text-[10px] md:text-[11px] text-gray-500 leading-relaxed border-b border-gray-100 pb-3 md:pb-4">Adjust these parameters only if the default optimization is causing visible artifacts or retaining too much file size.</p>
+                        <div>
+                            <label class="flex justify-between text-xs md:text-sm font-bold text-gray-900 mb-1">
+                                Spatial Threshold <span id="valThresh" class="font-mono text-gray-500">0.50 px</span>
+                            </label>
+                            <input type="range" id="inThresh" min="0.05" max="5.0" step="0.05" value="0.5" class="w-full accent-black cursor-pointer mb-2">
+                        </div>
+                        <div>
+                            <label class="flex justify-between text-xs md:text-sm font-bold text-gray-900 mb-1">
+                                Pressure Equivalence <span id="valPress" class="font-mono text-gray-500">100 lvl</span>
+                            </label>
+                            <input type="range" id="inPress" min="10" max="1000" step="10" value="100" class="w-full accent-black cursor-pointer mb-2">
+                        </div>
+                        <div>
+                            <label class="flex justify-between text-xs md:text-sm font-bold text-gray-900 mb-1">
+                                Tilt Equivalence <span id="valTilt" class="font-mono text-gray-500">20 units</span>
+                            </label>
+                            <input type="range" id="inTilt" min="1" max="100" step="1" value="20" class="w-full accent-black cursor-pointer">
+                        </div>
+                    </div>
+                </details>
+            </div>
+
+            <div class="p-4 mt-auto border-t border-gray-100 flex flex-col gap-3 shrink-0 sm:hidden">
+                <button onclick="openModal('modalExplain')" class="text-left text-sm font-semibold text-gray-600 hover:text-black transition">How it Works</button>
+                <button onclick="openModal('modalLicense')" class="text-left text-sm font-semibold text-gray-600 hover:text-black transition">License & Disclaimer</button>
+                <a href="https://github.com/nrontsis/boox-note-optimizer" target="_blank" rel="noopener noreferrer" class="text-left text-sm font-semibold text-gray-600 hover:text-black transition">GitHub Source</a>
+            </div>
+        </div>
+
+        <div id="mainArea" class="relative flex flex-col bg-white border border-gray-200 rounded-xl md:rounded-2xl shadow-sm overflow-hidden min-h-[65vh] md:min-h-0 md:flex-1 shrink-0 w-full md:h-full">
+            
+            <div id="uploadZone" class="flex-1 flex flex-col items-center justify-center bg-white overflow-y-auto px-4 py-8">
+                <div class="p-6 md:p-8 w-full max-w-2xl flex flex-col items-center cursor-pointer group" onclick="document.getElementById('fileInput').click()">
+                    <div class="p-8 md:p-10 w-full border-4 border-dashed border-gray-300 rounded-[2rem] md:rounded-[3rem] text-center hover:border-blue-400 hover:bg-blue-50/50 transition">
+                        <svg class="w-16 h-16 md:w-20 md:h-20 mx-auto mb-4 text-blue-500/80 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                        <h2 class="text-2xl md:text-3xl font-extrabold text-gray-900 mb-2">Select a .note file</h2>
+                        <p class="text-gray-500 text-sm md:text-lg">Tap or click to browse locally.</p>
+                        <input type="file" id="fileInput" accept=".note,*/*" class="hidden">
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-center gap-4 text-xs font-bold text-gray-400 tracking-widest my-2">
+                    <div class="h-px w-8 md:w-12 bg-gray-300"></div>OR<div class="h-px w-8 md:w-12 bg-gray-300"></div>
+                </div>
+                
+                <button id="btnDemo" class="mb-6 md:mb-8 px-6 md:px-8 py-2.5 md:py-3 bg-white text-gray-800 border border-gray-200 font-bold text-sm md:text-base rounded-full shadow-sm hover:border-gray-300 hover:bg-gray-100 transition disabled:opacity-50" onclick="window.loadDemo(event)">
+                    Load Demo File
+                </button>
+
+                <div class="max-w-lg w-full px-5 md:px-6 pb-6 md:pb-8">
+                    <div class="bg-gray-50 p-5 md:p-6 rounded-2xl border border-gray-200">
+                        <h3 class="font-bold text-gray-900 mb-2 md:mb-3">Obtaining your files:</h3>
+                        <p class="text-xs md:text-sm text-gray-600 mb-4 md:mb-5">From the native Notes app, long-press a notebook, tap <b>Share and Export</b> &rarr; <b>Export to local (.note)</b>.</p>
+                        <div class="bg-blue-50 p-3 md:p-4 rounded-xl text-blue-900 text-xs md:text-sm border border-blue-100 leading-relaxed shadow-sm">
+                            <strong class="block mb-1">💡 Pro Tip</strong> 
+                            You can open this page on Chrome <b>directly on your Boox device</b> and select the files straight from internal storage (`Storage/note/`). No need to transfer files.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="previewPlaceholder" class="hidden flex-1 bg-white flex-col items-center justify-center p-4 md:p-8 overflow-y-auto">
+                <div class="max-w-md w-full flex flex-col items-center">
+                    <div class="w-14 h-14 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-4 shrink-0 shadow-sm border border-green-200">
+                        <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                    </div>
+                    <h2 class="text-xl md:text-2xl font-bold text-gray-900 mb-2 text-center">Optimization Complete</h2>
+                    <p class="text-sm text-gray-500 mb-6 text-center leading-relaxed">Your note has been successfully optimized in memory.</p>
+                    
+                    <div class="bg-amber-50 border border-amber-200 rounded-xl p-5 w-full text-left mb-6 shadow-sm">
+                        <div class="flex justify-between items-start mb-3">
+                            <span class="bg-amber-100 text-amber-800 text-[10px] font-bold px-2.5 py-1 rounded uppercase tracking-wide">Experimental Visualizer</span>
+                            <span class="text-xl leading-none">⚠️</span>
+                        </div>
+                        <h3 class="text-sm font-bold text-gray-900 mb-2">Beta Preview functionality</h3>
+                        <p class="text-xs text-gray-700 leading-relaxed mb-4">
+                            The preview functionality is approximate, only tested with files with latest firmware on Boox Note Air 5c (as of 2026/02/18) and not fully matching the end result in Boox. <b>It should only be used comparatively</b> to spot major artifacts from the effect of the optimization.
+                        </p>
+                    </div>
+                    
+                    <div class="flex flex-col w-full gap-3">
+                        <button id="btnDlDirect" class="w-full py-3.5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition shadow-sm text-sm">
+                            Download Optimized .note
+                        </button>
+                        <button id="btnLoadPreview" class="w-full py-3 bg-white border border-gray-200 text-gray-800 font-bold rounded-xl hover:bg-gray-50 transition shadow-sm text-sm">
+                            Load Visual Comparison
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="workspaceView" class="hidden flex-1 flex-col w-full h-full relative">
+                
+                <div class="flex justify-between items-center p-2 md:p-3 border-b border-gray-200 bg-white shadow-sm z-30 shrink-0">
+                    <div class="flex items-center gap-2 md:gap-4">
+                        <button id="btnResetZoom" class="px-2.5 md:px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-xs md:text-sm font-semibold rounded text-gray-700 transition shadow-sm">Fit to Screen</button>
+                        <div class="text-[10px] md:text-[11px] font-bold text-gray-400 uppercase tracking-wider hidden lg:block">Figma Architecture: Scroll to zoom • Drag to pan</div>
+                    </div>
+                    <div id="paginator" class="hidden items-center gap-1 md:gap-2 bg-gray-100 px-2 py-1 md:py-1.5 rounded-lg text-xs md:text-sm font-medium">
+                        <button id="btnPrev" class="px-2 md:px-3 py-1 bg-white border border-gray-200 rounded shadow-sm font-bold hover:text-blue-600 transition">&larr;</button>
+                        <span id="pageText" class="font-mono w-14 md:w-16 text-center text-gray-600">Pg 1/1</span>
+                        <button id="btnNext" class="px-2 md:px-3 py-1 bg-white border border-gray-200 rounded shadow-sm font-bold hover:text-blue-600 transition">&rarr;</button>
+                    </div>
+                </div>
+
+                <div id="splitContainer" class="flex-1 w-full flex flex-col md:flex-row relative bg-gray-200 overflow-hidden select-none touch-none">
+                    <div id="interactionLayer" class="absolute inset-0 z-40 cursor-grab active:cursor-grabbing"></div>
+                    
+                    <div class="absolute top-1/2 left-0 right-0 h-0.5 md:w-0.5 md:h-auto md:top-0 md:bottom-0 md:left-1/2 bg-gray-300 z-30 shadow-2xl transform -translate-y-1/2 md:translate-y-0 md:-translate-x-1/2 pointer-events-none"></div>
+
+                    <div class="w-full h-1/2 md:w-1/2 md:h-full relative overflow-hidden pointer-events-none" id="paneLeft">
+                        <div class="absolute top-2 left-2 md:top-4 md:left-4 z-10 bg-white/90 backdrop-blur px-2 md:px-3 py-1 md:py-1.5 rounded shadow-sm font-bold text-[9px] md:text-xs tracking-wider text-gray-600 border border-gray-200">ORIGINAL</div>
+                        <canvas id="cOrig" width="1860" height="2480" class="absolute top-0 left-0 will-change-transform bg-white shadow-xl canvas-track" style="width: 1860px; height: 2480px;"></canvas>
+                    </div>
+
+                    <div class="w-full h-1/2 md:w-1/2 md:h-full relative overflow-hidden pointer-events-none" id="paneRight">
+                        <div class="absolute top-2 left-2 md:top-4 md:left-4 z-10 bg-blue-50/90 backdrop-blur px-2 md:px-3 py-1 md:py-1.5 rounded shadow-sm font-bold text-[9px] md:text-xs tracking-wider text-blue-700 border border-blue-200">OPTIMIZED</div>
+                        <canvas id="cDeb" width="1860" height="2480" class="absolute top-0 left-0 will-change-transform bg-white shadow-xl canvas-track" style="width: 1860px; height: 2480px;"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="modalBackdrop" class="fixed inset-0 bg-gray-900/60 z-[100] hidden items-center justify-center p-4 backdrop-blur-sm transition-opacity opacity-0" onclick="if(event.target===this) closeModal()">
+        <div id="modalExplain" class="hidden bg-white rounded-2xl shadow-2xl max-w-2xl w-full flex-col overflow-hidden relative transform transition-transform scale-95 modal-content">
+            <button onclick="closeModal()" class="absolute top-6 right-6 text-gray-400 hover:text-black transition">✖</button>
+            <div class="p-8 pb-6 border-b border-gray-100 bg-gray-50">
+                <h2 class="text-2xl font-bold text-gray-900">Stroke Optimization</h2>
+            </div>
+            <div class="p-8 space-y-5 text-[15px] text-gray-800 leading-relaxed">
+                <p>To keep writing lag-free, Boox tablets record far more pen data than actually needed. While this is great for responsiveness, it results in unnecessarily large files filled with redundant points&mdash;like saving hundreds of overlapping dots just to draw a simple straight line.</p>
+                <p>Instead of blindly smoothing out your lines and altering your handwriting, this app safely cleans up the extra data. It analyzes the exact position, pressure, and tilt of your strokes, and removes a point only if the change is completely invisible to the human eye.</p>
+                <p>This results in a drastically smaller file sizes with zero loss in visual quality.</p>
+            </div>
+        </div>
+
+        <div id="modalLicense" class="hidden bg-white rounded-2xl shadow-2xl max-w-2xl w-full flex-col overflow-hidden relative transform transition-transform scale-95 modal-content">
+            <button onclick="closeModal()" class="absolute top-4 right-4 md:top-6 md:right-6 text-gray-400 hover:text-black transition p-2">✖</button>
+            <div class="p-5 md:p-8 pb-4 md:pb-6 border-b border-gray-100 bg-gray-50">
+                <h2 class="text-xl md:text-2xl font-bold text-gray-900 pr-8">License & Legal</h2>
+            </div>
+            <div class="p-5 md:p-8 space-y-5 md:space-y-6 text-sm md:text-[15px] text-gray-800 leading-relaxed overflow-y-auto max-h-[60vh] custom-scrollbar">
+                <div>
+                    <h3 class="font-bold text-gray-900 mb-1 uppercase text-xs tracking-wider">Not Affiliated</h3>
+                    <p class="text-sm">This application is an independent community-driven project. It is <strong>not affiliated with, endorsed by, sponsored by, or connected to Onyx International Inc. or the BOOX brand</strong> in any way.</p>
+                </div>
+                <div>
+                    <h3 class="font-bold text-gray-900 mb-1 uppercase text-xs tracking-wider">MIT License</h3>
+                    <p class="text-gray-600 font-mono text-[11px] md:text-xs bg-gray-100 p-3 md:p-4 rounded-lg border border-gray-200">
+                        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY...
+                    </p>
+                </div>
+                <div class="bg-amber-50 p-4 rounded-xl text-amber-900 text-sm border border-amber-200 shadow-sm">
+                    <strong class="block mb-1">⚠️ Data Safety Recommendation</strong> 
+                    Always ensure you maintain backups of your original <code>.note</code> files before deleting them or replacing them on your device.
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module">
+        import init, { AppEngine } from './pkg/boox_optimizer.js';
+
+        let app = null;
+        let filename = "document";
+        let page = 0;
+        let originalFileSize = 0;
+        let optimizedBlob = null;
+        let previewEnabled = 'false';
+
+        // --- Modals Controller ---
+        window.openModal = (id, event) => {
+            if(event) { event.preventDefault(); event.stopPropagation(); }
+            document.querySelectorAll('.modal-content').forEach(m => m.classList.add('hidden'));
+            const bdrop = document.getElementById('modalBackdrop');
+            const target = document.getElementById(id);
+            bdrop.classList.remove('hidden');
+            bdrop.classList.add('flex');
+            target.classList.remove('hidden');
+            target.classList.add('flex');
+            requestAnimationFrame(() => {
+                bdrop.classList.remove('opacity-0');
+                target.classList.replace('scale-95', 'scale-100');
+            });
+        };
+        
+        window.closeModal = () => {
+            const bdrop = document.getElementById('modalBackdrop');
+            bdrop.classList.add('opacity-0');
+            document.querySelectorAll('.modal-content').forEach(m => m.classList.replace('scale-100', 'scale-95'));
+            setTimeout(() => {
+                bdrop.classList.add('hidden');
+                bdrop.classList.remove('flex');
+            }, 300);
+        };
+
+        // --- UI Bindings ---
+        const ui = {
+            headerBtn: document.getElementById('headerUploadBtn'), fileInpHdr: document.getElementById('headerFileInput'),
+            uploadZone: document.getElementById('uploadZone'), fileInp: document.getElementById('fileInput'),
+            sidebar: document.getElementById('sidebar'), mainArea: document.getElementById('mainArea'),
+            workspaceView: document.getElementById('workspaceView'), previewPlaceholder: document.getElementById('previewPlaceholder'), 
+            
+            btnLoadPreview: document.getElementById('btnLoadPreview'),
+            btnDlDirect: document.getElementById('btnDlDirect'),
+            
+            inThresh: document.getElementById('inThresh'), valThresh: document.getElementById('valThresh'),
+            inPress: document.getElementById('inPress'), valPress: document.getElementById('valPress'),
+            inTilt: document.getElementById('inTilt'), valTilt: document.getElementById('valTilt'),
+            optResults: document.getElementById('optResults'),
+            
+            interactionLayer: document.getElementById('interactionLayer'), paneLeft: document.getElementById('paneLeft'), paneRight: document.getElementById('paneRight'),
+            tracks: document.querySelectorAll('.canvas-track'), cOrig: document.getElementById('cOrig'), cDeb: document.getElementById('cDeb'),
+            
+            paginator: document.getElementById('paginator'), pageText: document.getElementById('pageText'), btnResetZoom: document.getElementById('btnResetZoom'),
+            btnDlNote: document.getElementById('btnDlNote'), btnOptPdf: document.getElementById('btnOptPdf'), btnOptJpeg: document.getElementById('btnOptJpeg')
+        };
+
+        const formatBytes = (bytes) => {
+            if (bytes === 0) return '0 B';
+            const k = 1024, i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + ['B', 'KB', 'MB'][i];
+        };
+
+        // CRITICAL FIX: Asynchronous Revocation & Proper DOM attachment.
+        function downloadUrl(url, name) { 
+            const a = document.createElement('a'); 
+            a.style.display = 'none';
+            a.href = url; 
+            a.download = name; 
+            document.body.appendChild(a); 
+            a.click(); 
+            setTimeout(() => { 
+                document.body.removeChild(a); 
+                if (url.startsWith('blob:')) URL.revokeObjectURL(url); 
+            }, 1000); 
+        }
+
+        const inputs = [ui.inThresh, ui.inPress, ui.inTilt];
+        const labels = [ui.valThresh, ui.valPress, ui.valTilt];
+        const units = [' px', ' lvl', ' units'];
+
+        inputs.forEach((inp, i) => {
+            labels[i].innerText = `${i===0 ? parseFloat(inp.value).toFixed(2) : inp.value}${units[i]}`;
+            
+            inp.addEventListener('input', (e) => labels[i].innerText = `${i===0 ? parseFloat(e.target.value).toFixed(2) : e.target.value}${units[i]}`);
+            inp.addEventListener('change', (e) => { if(app) debouncedProcess(); });
+        });
+
+        await init();
+
+        // --- File State Handlers ---
+        ui.btnDlDirect.onclick = () => {
+            if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`);
+        };
+
+        ui.btnLoadPreview.onclick = () => {
+            previewEnabled = true;
+            
+            ui.previewPlaceholder.classList.add('hidden');
+            ui.previewPlaceholder.classList.remove('flex');
+            
+            ui.workspaceView.classList.remove('hidden');
+            ui.workspaceView.classList.add('flex');
+            
+            [ui.btnOptPdf, ui.btnOptJpeg].forEach(b => b.disabled = false);
+            
+            setTimeout(() => {
+                fitToScreen();
+                renderCanvases();
+            }, 10);
+        };
+
+        const loadBuffer = (uint8arr) => {
+            if(app) { try { app.free(); } catch(e) {} }
+            app = new AppEngine(uint8arr);
+            
+            previewEnabled = false; // Always reset to false on load
+            
+            ui.uploadZone.classList.add('hidden');
+            ui.uploadZone.classList.remove('flex');
+            
+            ui.sidebar.classList.remove('hidden');
+            ui.sidebar.classList.add('flex');
+            
+            ui.headerBtn.classList.remove('hidden');
+            ui.headerBtn.classList.add('block');
+            
+            ui.btnDlDirect.disabled = true;
+            ui.btnDlDirect.innerText = "Optimizing...";
+            ui.btnLoadPreview.disabled = true;
+
+            // Always show the warning layout
+            ui.workspaceView.classList.add('hidden');
+            ui.workspaceView.classList.remove('flex');
+            
+            ui.previewPlaceholder.classList.remove('hidden');
+            ui.previewPlaceholder.classList.add('flex');
+            
+            [ui.btnOptPdf, ui.btnOptJpeg].forEach(b => b.disabled = true);
+
+            page = 0;
+            setTimeout(() => {
+                debouncedProcess();
+            }, 10);
+        };
+
+        const loadFile = async (file) => {
+            if (!file || !file.name.endsWith('.note')) return alert('Please upload a valid .note file');
+            filename = file.name.replace('.note', '');
+            originalFileSize = file.size;
+            try { loadBuffer(new Uint8Array(await file.arrayBuffer())); } 
+            catch (err) { alert("Corrupted .note file format: " + err); }
+        };
+
+        window.loadDemo = async (e) => {
+            if(e) { e.preventDefault(); e.stopPropagation(); }
+            const btn = document.getElementById('btnDemo');
+            const ogText = btn.innerText; 
+            btn.innerText = "Downloading...";
+            btn.setAttribute('disabled', 'true');
+            try {
+                const res = await fetch('demo.note');
+                if (!res.ok) throw new Error();
+                const ab = await res.arrayBuffer();
+                filename = "demo";
+                originalFileSize = ab.byteLength;
+                loadBuffer(new Uint8Array(ab));
+            } catch (err) {
+                alert("Could not locate demo.note. Please ensure it rests in the same local root directory.");
+                btn.innerText = ogText;
+                btn.removeAttribute('disabled');
+            }
+        };
+
+        ui.uploadZone.addEventListener('dragover', e => { e.preventDefault(); ui.uploadZone.firstElementChild.classList.add('border-blue-400', 'bg-blue-50/50'); });
+        ui.uploadZone.addEventListener('dragleave', () => ui.uploadZone.firstElementChild.classList.remove('border-blue-400', 'bg-blue-50/50'));
+        ui.uploadZone.addEventListener('drop', e => { e.preventDefault(); ui.uploadZone.firstElementChild.classList.remove('border-blue-400', 'bg-blue-50/50'); if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+        
+        const fileEvt = e => { if(e.target.files[0]) loadFile(e.target.files[0]); e.target.value = ''; };
+        ui.fileInp.addEventListener('change', fileEvt);
+        ui.fileInpHdr.addEventListener('change', fileEvt);
+
+        // --- Interaction Engine ---
+        let tx = 0, ty = 0, scale = 0.25;
+
+        function applyTransform() { ui.tracks.forEach(track => { track.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; }); }
+
+        function fitToScreen() {
+            if(ui.workspaceView.offsetParent === null) return;
+            const rect = ui.paneLeft.getBoundingClientRect();
+            if(rect.width === 0 || rect.height === 0) return;
+            
+            const targetW = 1860; const targetH = 2480;
+            const padding = window.innerWidth < 768 ? 24 : 64; 
+            scale = Math.min(Math.max(0.05, (rect.width - padding) / targetW), Math.max(0.05, (rect.height - padding) / targetH));
+            tx = (rect.width - targetW * scale) / 2; ty = (rect.height - targetH * scale) / 2;
+            applyTransform();
+        }
+        
+        ui.btnResetZoom.onclick = fitToScreen;
+        window.addEventListener('resize', () => { if(app && previewEnabled) fitToScreen(); });
+
+        function getPointerMetrics(clientX, clientY) {
+            const rectL = ui.paneLeft.getBoundingClientRect();
+            const rectR = ui.paneRight.getBoundingClientRect();
+            let mx, my;
+            
+            // Elegantly supports BOTH horizontal and vertical splits 
+            if (clientX >= rectR.left && clientX <= rectR.right && clientY >= rectR.top && clientY <= rectR.bottom) {
+                mx = clientX - rectR.left; my = clientY - rectR.top;
+            } else {
+                mx = clientX - rectL.left; my = clientY - rectL.top;
+            }
+            return { mx, my };
+        }
+
+        let isDragging = false, lastX = 0, lastY = 0;
+        ui.interactionLayer.addEventListener('mousedown', e => { isDragging = true; lastX = e.clientX; lastY = e.clientY; ui.interactionLayer.classList.replace('cursor-grab', 'cursor-grabbing'); });
+        window.addEventListener('mouseup', () => { isDragging = false; ui.interactionLayer.classList.replace('cursor-grabbing', 'cursor-grab'); });
+        window.addEventListener('mousemove', e => {
+            if (!isDragging) return;
+            tx += e.clientX - lastX; ty += e.clientY - lastY;
+            lastX = e.clientX; lastY = e.clientY;
+            applyTransform();
+        });
+
+        ui.interactionLayer.addEventListener('wheel', e => {
+            e.preventDefault();
+            const { mx, my } = getPointerMetrics(e.clientX, e.clientY);
+            if (e.ctrlKey || e.metaKey || (!Number.isInteger(e.deltaY) && e.deltaX === 0)) {
+                const zoom = Math.exp(-e.deltaY * 0.01);
+                const newScale = Math.min(Math.max(0.05, scale * zoom), 20);
+                const ratio = newScale / scale;
+                tx = mx - (mx - tx) * ratio; ty = my - (my - ty) * ratio;
+                scale = newScale;
+            } else { tx -= e.deltaX; ty -= e.deltaY; }
+            applyTransform();
+        }, { passive: false });
+
+        let activeTouches = new Map();
+        ui.interactionLayer.addEventListener('touchstart', e => {
+            e.preventDefault();
+            for (let i = 0; i < e.changedTouches.length; i++) activeTouches.set(e.changedTouches[i].identifier, e.changedTouches[i]);
+        }, {passive: false});
+
+        ui.interactionLayer.addEventListener('touchmove', e => {
+            e.preventDefault();
+            const prevTouches = new Map(activeTouches);
+            for (let i = 0; i < e.changedTouches.length; i++) activeTouches.set(e.changedTouches[i].identifier, e.changedTouches[i]);
+            const touches = Array.from(e.touches);
+            
+            if (touches.length === 1) { 
+                const p = prevTouches.get(touches[0].identifier);
+                if (p) { tx += touches[0].clientX - p.clientX; ty += touches[0].clientY - p.clientY; }
+            } else if (touches.length === 2) { 
+                const [t1, t2] = touches;
+                const p1 = prevTouches.get(t1.identifier), p2 = prevTouches.get(t2.identifier);
+                if (p1 && p2) {
+                    const prevDist = Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
+                    const curDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+                    const prevCx = (p1.clientX + p2.clientX) / 2, prevCy = (p1.clientY + p2.clientY) / 2;
+                    const curCx = (t1.clientX + t2.clientX) / 2, curCy = (t1.clientY + t2.clientY) / 2;
+                    
+                    tx += curCx - prevCx; ty += curCy - prevCy;
+                    if (prevDist > 0) {
+                        const { mx, my } = getPointerMetrics(curCx, curCy);
+                        const newScale = Math.min(Math.max(0.05, scale * (curDist / prevDist)), 20);
+                        const ratio = newScale / scale;
+                        tx = mx - (mx - tx) * ratio; ty = my - (my - ty) * ratio;
+                        scale = newScale;
+                    }
+                }
+            }
+            applyTransform();
+        }, {passive: false});
+
+        const handleTouchEnd = e => { for (let i = 0; i < e.changedTouches.length; i++) activeTouches.delete(e.changedTouches[i].identifier); };
+        ui.interactionLayer.addEventListener('touchend', handleTouchEnd); ui.interactionLayer.addEventListener('touchcancel', handleTouchEnd);
+
+        // --- Processing Logic ---
+        let debounceTimer;
+        function debouncedProcess() {
+            clearTimeout(debounceTimer);
+            
+            [ui.btnDlNote, ui.btnOptPdf, ui.btnOptJpeg, ui.btnLoadPreview, ui.btnDlDirect].forEach(b => { if(b) b.disabled = true; });
+            ui.btnDlNote.innerText = "Optimizing...";
+            if (ui.btnDlDirect) ui.btnDlDirect.innerText = "Optimizing...";
+            ui.optResults.innerHTML = '<span class="animate-pulse text-blue-600 font-semibold">Processing...</span>';
+            
+            debounceTimer = setTimeout(() => {
+                if(!app) return;
+                try {
+                    app.debloat(parseFloat(ui.inThresh.value), parseFloat(ui.inPress.value), parseFloat(ui.inTilt.value));
+                    
+                    const count = app.get_page_count();
+                    if (count > 1) { 
+                        ui.paginator.classList.remove('hidden');
+                        ui.paginator.classList.add('flex');
+                        ui.pageText.innerText = `Pg ${page + 1}/${count}`; 
+                    } else {
+                        ui.paginator.classList.remove('flex');
+                        ui.paginator.classList.add('hidden');
+                    }
+
+                    const o = app.get_orig_points(), d = app.get_deb_points();
+                    const zipData = app.export();
+                    
+                    // CRITICAL FIX: application/octet-stream strictly blocks iOS Safari from overriding 
+                    // the target into its native "Zip Archive Preview" utility.
+                    optimizedBlob = new Blob([zipData], {type: 'application/octet-stream'});
+                    
+                    const szRed = originalFileSize > 0 ? ((originalFileSize - optimizedBlob.size) / originalFileSize * 100).toFixed(1) : 0;
+
+                    ui.optResults.innerHTML = `
+                        <div class="flex items-center gap-2 mb-3">
+                            <span class="text-3xl font-black text-emerald-600">${szRed}%</span>
+                            <span class="text-sm font-bold text-gray-700 leading-tight">reduction in<br>file size</span>
+                        </div>
+                        <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[13px] font-mono text-gray-600 bg-gray-50/80 p-3 rounded-lg border border-gray-100 shadow-inner">
+                            <span class="text-gray-400 text-right">Points:</span>
+                            <span>${o.toLocaleString()} &rarr; ${d.toLocaleString()}</span>
+                            <span class="text-gray-400 text-right">Size:</span>
+                            <span>${formatBytes(originalFileSize)} &rarr; ${formatBytes(optimizedBlob.size)}</span>
+                        </div>
+                    `;
+
+                    // Enable everything after successful optimization
+                    ui.btnDlNote.disabled = false;
+                    ui.btnDlNote.innerText = "Download Optimized .note";
+                    ui.btnDlDirect.disabled = false;
+                    ui.btnDlDirect.innerText = "Download Optimized .note";
+                    ui.btnLoadPreview.disabled = false;
+                    
+                    if (previewEnabled) { 
+                        [ui.btnOptPdf, ui.btnOptJpeg].forEach(b => b.disabled = false); 
+                        renderCanvases(); 
+                    }
+                } catch (e) {
+                    console.error("Optimization failed:", e);
+                    ui.optResults.innerHTML = '<span class="text-red-500 font-bold">Error during optimization.</span>';
+                    ui.btnDlNote.innerText = "Error";
+                    ui.btnDlDirect.innerText = "Error";
+                }
+            }, 100);
+        }
+
+        function renderCanvases() {
+            if(!app || !previewEnabled) return;
+            app.render_page(ui.cOrig, false, page, false);
+            app.render_page(ui.cDeb, true, page, false);
+        }
+
+        document.getElementById('btnPrev').onclick = () => { if(page > 0) { page--; ui.pageText.innerText = `Pg ${page + 1}/${app.get_page_count()}`; renderCanvases(); } };
+        document.getElementById('btnNext').onclick = () => { if(app && page < app.get_page_count()-1) { page++; ui.pageText.innerText = `Pg ${page + 1}/${app.get_page_count()}`; renderCanvases(); } };
+
+        ui.btnDlNote.onclick = () => { if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`); };
+
+        ui.btnOptJpeg.onclick = () => {
+            if(!app || !previewEnabled) return;
+            // Native toBlob prevents mobile OS memory crashes when dealing with massive base64 strings
+            ui.cDeb.toBlob((blob) => {
+                if (blob) downloadUrl(URL.createObjectURL(blob), `${filename}_Pg${page+1}_opt.jpg`);
+            }, "image/jpeg", 0.98);
+        };
+
+        ui.btnOptPdf.onclick = async () => {
+            if(!app || !previewEnabled) return;
+            const { jsPDF } = window.jspdf; const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: [1860, 2480] });
+            
+            const originalText = ui.btnOptPdf.innerText; 
+            ui.btnOptPdf.innerText = "Processing...";
+            ui.btnOptPdf.disabled = true;
+            
+            try {
+                for(let i=0; i<app.get_page_count(); i++) {
+                    if (i > 0) pdf.addPage();
+                    app.render_page(ui.cDeb, true, i, false);
+                    await new Promise(r => setTimeout(r, 60));
+                    pdf.addImage(ui.cDeb.toDataURL("image/jpeg", 0.98), 'JPEG', 0, 0, 1860, 2480);
+                }
+                app.render_page(ui.cDeb, true, page, false); 
+                pdf.save(`${filename}_opt.pdf`);
+            } catch(e) {
+                console.error(e);
+                alert("Failed to export PDF.");
+            } finally {
+                ui.btnOptPdf.innerText = originalText;
+                ui.btnOptPdf.disabled = false;
+            }
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM
+        run: wasm-pack build --target web --release
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site/pkg
+          cp web/index.html web/demo.note _site/
+          cp pkg/boox_optimizer{.js,.d.ts,_bg.wasm,_bg.wasm.d.ts} _site/pkg/
+
+      - uses: actions/upload-pages-artifact@v3
+
+      - uses: actions/deploy-pages@v4
+        id: deployment
