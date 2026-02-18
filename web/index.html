@@ -75,11 +75,11 @@
                     Download Optimized .note
                 </button>
                 
-                <div class="flex flex-col gap-2">
+                <div id="exportVisualsSection" class="hidden flex-col gap-2">
                     <span class="text-[10px] md:text-[11px] font-bold text-gray-400 uppercase tracking-widest">Export Visuals</span>
                     <div class="grid grid-cols-2 gap-2 md:gap-3">
-                        <button id="btnOptPdf" class="py-2.5 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed">PDF</button>
-                        <button id="btnOptJpeg" class="py-2.5 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed">JPEG</button>
+                        <button id="btnOptPdf" class="py-2.5 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed">PDF (vector)</button>
+                        <button id="btnOptPng" class="py-2.5 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed">PNG</button>
                     </div>
                 </div>
             </div>
@@ -119,6 +119,13 @@
                         </div>
                     </div>
                 </details>
+            </div>
+
+            <div class="p-4 md:p-5 mt-auto border-t border-gray-100 shrink-0">
+                <a id="btnReportIssue" href="#" target="_blank" rel="noopener noreferrer" class="flex items-center justify-center gap-2 w-full py-2.5 bg-amber-50 border border-amber-200 hover:bg-amber-100 text-amber-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition">
+                    <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    Report an Issue with Your .note File
+                </a>
             </div>
 
             <div class="p-4 mt-auto border-t border-gray-100 flex flex-col gap-3 shrink-0 sm:hidden">
@@ -317,7 +324,8 @@
             tracks: document.querySelectorAll('.canvas-track'), cOrig: document.getElementById('cOrig'), cDeb: document.getElementById('cDeb'),
             
             paginator: document.getElementById('paginator'), pageText: document.getElementById('pageText'), btnResetZoom: document.getElementById('btnResetZoom'),
-            btnDlNote: document.getElementById('btnDlNote'), btnOptPdf: document.getElementById('btnOptPdf'), btnOptJpeg: document.getElementById('btnOptJpeg')
+            btnDlNote: document.getElementById('btnDlNote'), btnOptPdf: document.getElementById('btnOptPdf'), btnOptPng: document.getElementById('btnOptPng'),
+            exportVisualsSection: document.getElementById('exportVisualsSection'), btnReportIssue: document.getElementById('btnReportIssue')
         };
 
         const formatBytes = (bytes) => {
@@ -353,6 +361,24 @@
 
         await init();
 
+        // --- Report Issue Link ---
+        const issueTemplate = `## .note file issue
+
+**What happened:**
+<!-- Brief description of the problem (e.g. "optimization corrupts stroke X", "app crashes on load") -->
+
+**Attach your .note file:**
+<!-- We welcome contributions of problematic .note files. Minimal examples targeting the problematic region are especially helpful — consider exporting just the affected page(s). -->
+
+**Settings used:**
+- Spatial Threshold:
+- Pressure Equivalence:
+- Tilt Equivalence:
+
+**Device/firmware:**
+`;
+        ui.btnReportIssue.href = `https://github.com/nrontsis/boox-note-optimizer/issues/new?title=${encodeURIComponent('.note file issue: [brief description]')}&body=${encodeURIComponent(issueTemplate)}`;
+
         // --- File State Handlers ---
         ui.btnDlDirect.onclick = () => {
             if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`);
@@ -360,15 +386,17 @@
 
         ui.btnLoadPreview.onclick = () => {
             previewEnabled = true;
-            
+
             ui.previewPlaceholder.classList.add('hidden');
             ui.previewPlaceholder.classList.remove('flex');
-            
+
             ui.workspaceView.classList.remove('hidden');
             ui.workspaceView.classList.add('flex');
-            
-            [ui.btnOptPdf, ui.btnOptJpeg].forEach(b => b.disabled = false);
-            
+
+            ui.exportVisualsSection.classList.remove('hidden');
+            ui.exportVisualsSection.classList.add('flex');
+            [ui.btnOptPdf, ui.btnOptPng].forEach(b => b.disabled = false);
+
             setTimeout(() => {
                 fitToScreen();
                 renderCanvases();
@@ -410,7 +438,9 @@
             ui.previewPlaceholder.classList.remove('hidden');
             ui.previewPlaceholder.classList.add('flex');
             
-            [ui.btnOptPdf, ui.btnOptJpeg].forEach(b => b.disabled = true);
+            ui.exportVisualsSection.classList.add('hidden');
+            ui.exportVisualsSection.classList.remove('flex');
+            [ui.btnOptPdf, ui.btnOptPng].forEach(b => b.disabled = true);
 
             page = 0;
             setTimeout(() => {
@@ -556,7 +586,7 @@
         async function debouncedProcess() {
             clearTimeout(debounceTimer);
 
-            [ui.btnDlNote, ui.btnOptPdf, ui.btnOptJpeg, ui.btnLoadPreview, ui.btnDlDirect].forEach(b => { if(b) b.disabled = true; });
+            [ui.btnDlNote, ui.btnOptPdf, ui.btnOptPng, ui.btnLoadPreview, ui.btnDlDirect].forEach(b => { if(b) b.disabled = true; });
             ui.btnDlNote.innerText = "Optimizing...";
             if (ui.btnDlDirect) ui.btnDlDirect.innerText = "Optimizing...";
             ui.optResults.innerHTML = '<span class="animate-pulse text-blue-600 font-semibold">Processing...</span>';
@@ -605,7 +635,7 @@
                     ui.btnLoadPreview.disabled = false;
 
                     if (previewEnabled) {
-                        [ui.btnOptPdf, ui.btnOptJpeg].forEach(b => b.disabled = false);
+                        [ui.btnOptPdf, ui.btnOptPng].forEach(b => b.disabled = false);
                         renderCanvases();
                         fitToScreen();
                     }
@@ -627,12 +657,11 @@
 
         ui.btnDlNote.onclick = () => { if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`); };
 
-        ui.btnOptJpeg.onclick = () => {
+        ui.btnOptPng.onclick = () => {
             if(!app || !previewEnabled) return;
-            // Native toBlob prevents mobile OS memory crashes when dealing with massive base64 strings
             ui.cDeb.toBlob((blob) => {
-                if (blob) downloadUrl(URL.createObjectURL(blob), `${filename}_Pg${page+1}_opt.jpg`);
-            }, "image/jpeg", 0.98);
+                if (blob) downloadUrl(URL.createObjectURL(blob), `${filename}_Pg${page+1}_opt.png`);
+            }, "image/png");
         };
 
         ui.btnOptPdf.onclick = async () => {
@@ -649,18 +678,17 @@
                 for(let i=0; i<app.get_page_count(); i++) {
                     if (i > 0) pdf.addPage([pdfW, pdfH], format);
                     app.render_page(ui.cDeb, true, i, false);
-                    await new Promise(r => setTimeout(r, 60)); // Yield to painting
+                    await new Promise(r => setTimeout(r, 60));
 
-                    // .toBlob() forces memory-efficient buffering instead of a giant base64 string
-                    const blob = await new Promise(resolve => ui.cDeb.toBlob(resolve, "image/jpeg", 0.98));
+                    const blob = await new Promise(resolve => ui.cDeb.toBlob(resolve, "image/png"));
                     const url = URL.createObjectURL(blob);
 
                     const img = new Image();
                     img.src = url;
                     await new Promise(resolve => img.onload = resolve);
 
-                    pdf.addImage(img, 'JPEG', 0, 0, pdfW, pdfH);
-                    URL.revokeObjectURL(url); // Free V8 memory cleanly
+                    pdf.addImage(img, 'PNG', 0, 0, pdfW, pdfH);
+                    URL.revokeObjectURL(url);
                 }
                 app.render_page(ui.cDeb, true, page, false);
                 pdf.save(`${filename}_opt.pdf`);
