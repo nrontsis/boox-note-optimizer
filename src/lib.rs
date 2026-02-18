@@ -109,7 +109,7 @@ impl AppEngine {
     pub fn get_deb_points(&self) -> usize { self.deb_notes.iter().flat_map(|n| &n.strokes).map(|s| s.points.len()).sum() }
     pub fn get_page_count(&self) -> usize { self.pages.len() }
 
-    pub fn render_page(&mut self, canvas: &HtmlCanvasElement, use_deb: bool, page_idx: usize, simplified: bool) {
+    pub fn render_page(&mut self, canvas: &HtmlCanvasElement, use_deb: bool, page_idx: usize) {
         let ctx = canvas.get_context("2d").unwrap().unwrap().dyn_into::<CanvasRenderingContext2d>().unwrap();
         ctx.clear_rect(0.0, 0.0, self.canvas_w as f64, self.canvas_h as f64);
         ctx.set_fill_style(&JsValue::from_str("#ffffff"));
@@ -147,15 +147,6 @@ impl AppEngine {
                 if let Some(m) = meta.matrix { x = m[0]*p.x + m[1]*p.y + m[2]; y = m[3]*p.x + m[4]*p.y + m[5]; }
                 [x, y, (p.pressure as f32).clamp(1.0, 4095.0), u_tx[i], p.tilt_y as f32]
             }).collect();
-
-            if simplified {
-                ctx.begin_path(); ctx.set_line_width(meta.thickness as f64);
-                ctx.move_to(pts[0][0] as f64, pts[0][1] as f64);
-                for p in pts.iter().skip(1) { ctx.line_to(p[0] as f64, p[1] as f64); }
-                ctx.stroke();
-                ctx.restore();
-                continue;
-            }
 
             match meta.pen_type {
                 5 | 21 => { // Fountain & Marker

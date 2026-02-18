@@ -648,8 +648,8 @@
 
         function renderCanvases() {
             if(!app || !previewEnabled) return;
-            app.render_page(ui.cOrig, false, page, false);
-            app.render_page(ui.cDeb, true, page, false);
+            app.render_page(ui.cOrig, false, page);
+            app.render_page(ui.cDeb, true, page);
         }
 
         document.getElementById('btnPrev').onclick = () => { if(page > 0) { page--; ui.pageText.innerText = `Pg ${page + 1}/${app.get_page_count()}`; renderCanvases(); } };
@@ -677,7 +677,7 @@
             try {
                 for(let i=0; i<app.get_page_count(); i++) {
                     if (i > 0) pdf.addPage([pdfW, pdfH], format);
-                    app.render_page(ui.cDeb, true, i, false);
+                    app.render_page(ui.cDeb, true, i);
                     await new Promise(r => setTimeout(r, 60));
 
                     const blob = await new Promise(resolve => ui.cDeb.toBlob(resolve, "image/png"));
@@ -690,7 +690,7 @@
                     pdf.addImage(img, 'PNG', 0, 0, pdfW, pdfH);
                     URL.revokeObjectURL(url);
                 }
-                app.render_page(ui.cDeb, true, page, false);
+                app.render_page(ui.cDeb, true, page);
                 pdf.save(`${filename}_opt.pdf`);
             } catch(e) {
                 alert("Memory constraint reached. Failed to export PDF.");
