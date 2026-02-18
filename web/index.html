@@ -11,7 +11,6 @@
         }
     </script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/3.0.3/jspdf.umd.min.js"></script>
     <style>
         body { overscroll-behavior: none; }
         .will-change-transform { will-change: transform; transform-origin: top left; }
@@ -77,10 +76,7 @@
                 
                 <div id="exportVisualsSection" class="hidden flex-col gap-2">
                     <span class="text-[10px] md:text-[11px] font-bold text-gray-400 uppercase tracking-widest">Export Visuals</span>
-                    <div class="grid grid-cols-2 gap-2 md:gap-3">
-                        <button id="btnOptPdf" class="py-2.5 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed">PDF (vector)</button>
-                        <button id="btnOptPng" class="py-2.5 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed">PNG</button>
-                    </div>
+                    <button id="btnOptPng" class="w-full py-2.5 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed">Download as PNG</button>
                 </div>
             </div>
 
@@ -324,7 +320,7 @@
             tracks: document.querySelectorAll('.canvas-track'), cOrig: document.getElementById('cOrig'), cDeb: document.getElementById('cDeb'),
             
             paginator: document.getElementById('paginator'), pageText: document.getElementById('pageText'), btnResetZoom: document.getElementById('btnResetZoom'),
-            btnDlNote: document.getElementById('btnDlNote'), btnOptPdf: document.getElementById('btnOptPdf'), btnOptPng: document.getElementById('btnOptPng'),
+            btnDlNote: document.getElementById('btnDlNote'), btnOptPng: document.getElementById('btnOptPng'),
             exportVisualsSection: document.getElementById('exportVisualsSection'), btnReportIssue: document.getElementById('btnReportIssue')
         };
 
@@ -395,7 +391,7 @@
 
             ui.exportVisualsSection.classList.remove('hidden');
             ui.exportVisualsSection.classList.add('flex');
-            [ui.btnOptPdf, ui.btnOptPng].forEach(b => b.disabled = false);
+            ui.btnOptPng.disabled = false;
 
             setTimeout(() => {
                 fitToScreen();
@@ -440,7 +436,7 @@
             
             ui.exportVisualsSection.classList.add('hidden');
             ui.exportVisualsSection.classList.remove('flex');
-            [ui.btnOptPdf, ui.btnOptPng].forEach(b => b.disabled = true);
+            ui.btnOptPng.disabled = true;
 
             page = 0;
             setTimeout(() => {
@@ -586,7 +582,7 @@
         async function debouncedProcess() {
             clearTimeout(debounceTimer);
 
-            [ui.btnDlNote, ui.btnOptPdf, ui.btnOptPng, ui.btnLoadPreview, ui.btnDlDirect].forEach(b => { if(b) b.disabled = true; });
+            [ui.btnDlNote, ui.btnOptPng, ui.btnLoadPreview, ui.btnDlDirect].forEach(b => { if(b) b.disabled = true; });
             ui.btnDlNote.innerText = "Optimizing...";
             if (ui.btnDlDirect) ui.btnDlDirect.innerText = "Optimizing...";
             ui.optResults.innerHTML = '<span class="animate-pulse text-blue-600 font-semibold">Processing...</span>';
@@ -635,7 +631,7 @@
                     ui.btnLoadPreview.disabled = false;
 
                     if (previewEnabled) {
-                        [ui.btnOptPdf, ui.btnOptPng].forEach(b => b.disabled = false);
+                        ui.btnOptPng.disabled = false;
                         renderCanvases();
                         fitToScreen();
                     }
@@ -664,41 +660,6 @@
             }, "image/png");
         };
 
-        ui.btnOptPdf.onclick = async () => {
-            if(!app || !previewEnabled) return;
-            const { jsPDF } = window.jspdf;
-            const format = pdfW > pdfH ? "landscape" : "portrait";
-            const pdf = new jsPDF({ orientation: format, unit: "pt", format: [pdfW, pdfH] });
-
-            const originalText = ui.btnOptPdf.innerText;
-            ui.btnOptPdf.innerText = "Processing...";
-            ui.btnOptPdf.disabled = true;
-
-            try {
-                for(let i=0; i<app.get_page_count(); i++) {
-                    if (i > 0) pdf.addPage([pdfW, pdfH], format);
-                    app.render_page(ui.cDeb, true, i);
-                    await new Promise(r => setTimeout(r, 60));
-
-                    const blob = await new Promise(resolve => ui.cDeb.toBlob(resolve, "image/png"));
-                    const url = URL.createObjectURL(blob);
-
-                    const img = new Image();
-                    img.src = url;
-                    await new Promise(resolve => img.onload = resolve);
-
-                    pdf.addImage(img, 'PNG', 0, 0, pdfW, pdfH);
-                    URL.revokeObjectURL(url);
-                }
-                app.render_page(ui.cDeb, true, page);
-                pdf.save(`${filename}_opt.pdf`);
-            } catch(e) {
-                alert("Memory constraint reached. Failed to export PDF.");
-            } finally {
-                ui.btnOptPdf.innerText = originalText;
-                ui.btnOptPdf.disabled = false;
-            }
-        };
     </script>
 </body>
 </html>
