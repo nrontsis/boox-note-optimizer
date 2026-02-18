@@ -5,10 +5,43 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Boox Note Optimizer</title>
     <script>
-        if (typeof WebAssembly !== "object" || !/Chrome|Safari|Firefox|Edge/i.test(navigator.userAgent)) {
-            document.write('<div style="padding:40px;text-align:center;font-family:sans-serif;background:#fff;position:absolute;inset:0;z-index:9999;display:flex;flex-direction:column;justify-content:center;"><h2>Browser Not Supported</h2><p>Please use a modern version of Chrome, Safari, or Firefox with WebAssembly support to run this engine.</p></div>');
-            window.stop();
-        }
+        // --- DIAGNOSTIC CHECKER ---
+        (function() {
+            const checks = [
+                { name: "WebAssembly Support", valid: typeof WebAssembly === 'object' && typeof WebAssembly.instantiate === 'function' },
+                { name: "File Reading API", valid: !!(window.File && window.FileReader && window.FileList && window.Blob) },
+                { name: "URL/Download API", valid: !!(window.URL && window.URL.createObjectURL) },
+                { name: "Modern JavaScript (ES6+)", valid: true }
+            ];
+
+            const missing = checks.filter(c => !c.valid).map(c => c.name);
+            if (missing.length > 0) {
+                const missingList = missing.length > 0 
+                    ? missing.map(m => `<li>❌ Missing: ${m}</li>`).join('') 
+                    : `<li>⚠️ Detected incompatible browser</li>`;
+
+                document.write(`
+                    <div style="position:fixed;inset:0;background:white;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center;font-family:system-ui,-apple-system,sans-serif;">
+                        <div style="max-width:400px;background:#fff0f0;border:2px solid #ffcccc;padding:30px;border-radius:12px;">
+                            <h2 style="color:#d32f2f;margin-top:0;">Browser Not Supported</h2>
+                            <ul style="text-align:left;background:white;padding:15px 15px 15px 30px;border-radius:8px;border:1px solid #eee;list-style:none;color:#d32f2f;font-weight:bold;margin:20px 0;">
+                                ${missingList}
+                            </ul>
+                            <p style="color:#333;margin-bottom:20px;line-height:1.5;">
+                                This app requires advanced browser features that are not available in this webview.
+                            </p>
+                            <a href="googlechrome://" onclick="alert('Please open the App Store/Play Store to install Chrome if not available.')" style="display:inline-block;background:#0b57d0;color:white;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;font-size:16px;">
+                                Open in Google Chrome
+                            </a>
+                            <p style="margin-top:15px;font-size:12px;color:#666;">
+                                (Also works in Firefox or Brave)
+                            </p>
+                        </div>
+                    </div>
+                `);
+                window.stop(); // Stop the rest of the app from crashing
+            }
+        })();
     </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
