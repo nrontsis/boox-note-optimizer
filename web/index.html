@@ -5,43 +5,69 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Boox Note Optimizer</title>
     <script>
-        // --- DIAGNOSTIC CHECKER ---
+        // --- DIAGNOSTIC CHECKER (ES5-safe so it runs even in very old webviews) ---
         (function() {
-            const checks = [
-                { name: "WebAssembly Support", valid: typeof WebAssembly === 'object' && typeof WebAssembly.instantiate === 'function' },
-                { name: "File Reading API", valid: !!(window.File && window.FileReader && window.FileList && window.Blob) },
-                { name: "URL/Download API", valid: !!(window.URL && window.URL.createObjectURL) },
-                { name: "Modern JavaScript (ES6+)", valid: true }
-            ];
+            var missing = [];
+            if (typeof WebAssembly !== 'object' || typeof WebAssembly.instantiate !== 'function') missing.push("WebAssembly Support");
+            if (!(window.File && window.FileReader && window.FileList && window.Blob)) missing.push("File Reading API");
+            if (!(window.URL && window.URL.createObjectURL)) missing.push("URL/Download API");
 
-            const missing = checks.filter(c => !c.valid).map(c => c.name);
             if (missing.length > 0) {
-                const missingList = missing.length > 0 
-                    ? missing.map(m => `<li>❌ Missing: ${m}</li>`).join('') 
-                    : `<li>⚠️ Detected incompatible browser</li>`;
-
-                document.write(`
-                    <div style="position:fixed;inset:0;background:white;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center;font-family:system-ui,-apple-system,sans-serif;">
-                        <div style="max-width:400px;background:#fff0f0;border:2px solid #ffcccc;padding:30px;border-radius:12px;">
-                            <h2 style="color:#d32f2f;margin-top:0;">Browser Not Supported</h2>
-                            <ul style="text-align:left;background:white;padding:15px 15px 15px 30px;border-radius:8px;border:1px solid #eee;list-style:none;color:#d32f2f;font-weight:bold;margin:20px 0;">
-                                ${missingList}
-                            </ul>
-                            <p style="color:#333;margin-bottom:20px;line-height:1.5;">
-                                This app requires advanced browser features that are not available in this webview.
-                            </p>
-                            <a href="googlechrome://" onclick="alert('Please open the App Store/Play Store to install Chrome if not available.')" style="display:inline-block;background:#0b57d0;color:white;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;font-size:16px;">
-                                Open in Google Chrome
-                            </a>
-                            <p style="margin-top:15px;font-size:12px;color:#666;">
-                                (Also works in Firefox or Brave)
-                            </p>
-                        </div>
-                    </div>
-                `);
-                window.stop(); // Stop the rest of the app from crashing
+                var items = '';
+                for (var i = 0; i < missing.length; i++) items += '<li>Missing: ' + missing[i] + '</li>';
+                document.write(
+                    '<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:white;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center;font-family:system-ui,-apple-system,sans-serif;">' +
+                        '<div style="max-width:400px;background:#fff0f0;border:2px solid #ffcccc;padding:30px;border-radius:12px;">' +
+                            '<h2 style="color:#d32f2f;margin-top:0;">Browser Not Supported</h2>' +
+                            '<ul style="text-align:left;background:white;padding:15px 15px 15px 30px;border-radius:8px;border:1px solid #eee;list-style:none;color:#d32f2f;font-weight:bold;margin:20px 0;">' +
+                                items +
+                            '</ul>' +
+                            '<p style="color:#333;margin-bottom:20px;line-height:1.5;">' +
+                                'This app requires advanced browser features that are not available in this webview.' +
+                            '</p>' +
+                            '<a href="googlechrome://" onclick="alert(\'Please open the App Store/Play Store to install Chrome if not available.\')" style="display:inline-block;background:#0b57d0;color:white;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:bold;font-size:16px;">' +
+                                'Open in Google Chrome' +
+                            '</a>' +
+                            '<p style="margin-top:15px;font-size:12px;color:#666;">' +
+                                '(Also works in Firefox or Brave)' +
+                            '</p>' +
+                        '</div>' +
+                    '</div>'
+                );
+                window.stop();
             }
         })();
+    </script>
+    <script>
+        // --- Modals Controller (outside module so it works even if WASM fails) ---
+        function openModal(id, event) {
+            if(event) { event.preventDefault(); event.stopPropagation(); }
+            document.querySelectorAll('.modal-content').forEach(function(m) { m.classList.add('hidden'); });
+            var bdrop = document.getElementById('modalBackdrop');
+            var target = document.getElementById(id);
+            bdrop.classList.remove('hidden');
+            bdrop.classList.add('flex');
+            target.classList.remove('hidden');
+            target.classList.add('flex');
+            requestAnimationFrame(function() {
+                bdrop.classList.remove('opacity-0');
+                target.classList.remove('scale-95');
+                target.classList.add('scale-100');
+            });
+        }
+
+        function closeModal() {
+            var bdrop = document.getElementById('modalBackdrop');
+            bdrop.classList.add('opacity-0');
+            document.querySelectorAll('.modal-content').forEach(function(m) {
+                m.classList.remove('scale-100');
+                m.classList.add('scale-95');
+            });
+            setTimeout(function() {
+                bdrop.classList.add('hidden');
+                bdrop.classList.remove('flex');
+            }, 300);
+        }
     </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -70,7 +96,7 @@
         details > summary::-webkit-details-marker { display: none; }
     </style>
 </head>
-<body class="bg-gray-100 text-gray-800 font-sans antialiased h-[100dvh] overflow-hidden flex flex-col">
+<body class="bg-gray-100 text-gray-800 font-sans antialiased h-screen overflow-hidden flex flex-col" style="height:100vh;height:100dvh">
 
     <header class="flex-shrink-0 flex justify-between items-center px-4 md:px-6 py-3 md:py-4 bg-white border-b border-gray-200 z-50 shadow-sm relative">
         <div class="flex items-center gap-3 md:gap-4">
@@ -299,6 +325,8 @@
     <script type="module">
         import init, { AppEngine } from './pkg/boox_optimizer.js';
 
+        (async function() {
+
         let app = null;
         let filename = "document";
         let page = 0;
@@ -307,32 +335,6 @@
         let previewEnabled = 'false';
         let pdfW = 1860;
         let pdfH = 2480;
-
-        // --- Modals Controller ---
-        window.openModal = (id, event) => {
-            if(event) { event.preventDefault(); event.stopPropagation(); }
-            document.querySelectorAll('.modal-content').forEach(m => m.classList.add('hidden'));
-            const bdrop = document.getElementById('modalBackdrop');
-            const target = document.getElementById(id);
-            bdrop.classList.remove('hidden');
-            bdrop.classList.add('flex');
-            target.classList.remove('hidden');
-            target.classList.add('flex');
-            requestAnimationFrame(() => {
-                bdrop.classList.remove('opacity-0');
-                target.classList.replace('scale-95', 'scale-100');
-            });
-        };
-        
-        window.closeModal = () => {
-            const bdrop = document.getElementById('modalBackdrop');
-            bdrop.classList.add('opacity-0');
-            document.querySelectorAll('.modal-content').forEach(m => m.classList.replace('scale-100', 'scale-95'));
-            setTimeout(() => {
-                bdrop.classList.add('hidden');
-                bdrop.classList.remove('flex');
-            }, 300);
-        };
 
         // --- UI Bindings ---
         const ui = {
@@ -692,6 +694,19 @@
                 if (blob) downloadUrl(URL.createObjectURL(blob), `${filename}_Pg${page+1}_opt.png`);
             }, "image/png");
         };
+
+        })().catch(function(err) {
+            console.error('App init failed:', err);
+            var zone = document.getElementById('uploadZone');
+            if (zone) {
+                zone.innerHTML = '<div style="padding:40px;text-align:center;max-width:500px;margin:auto;">' +
+                    '<h2 style="color:#d32f2f;font-size:22px;font-weight:bold;margin-bottom:12px;">Failed to Load</h2>' +
+                    '<p style="color:#666;margin-bottom:16px;">The app engine could not initialize in this browser. This typically happens in Boox NeoReader\'s built-in browser, which has limited support for modern web features.</p>' +
+                    '<p style="color:#333;font-weight:bold;">Please open this page in <b>Chrome</b> on your Boox device instead.</p>' +
+                    '<p style="margin-top:20px;font-size:12px;color:#999;">Error: ' + (err.message || err) + '</p>' +
+                    '</div>';
+            }
+        });
 
     </script>
 </body>
