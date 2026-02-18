@@ -72,7 +72,7 @@ The last 4 bytes of the entire blob always point to where the index begins.
 
 ### Point Format
 
-Each point is 16 bytes, big-endian (`struct.Struct(">ffBBHI")`):
+Each point is 16 bytes, big-endian (`>ffBBHI` in [struct](https://docs.python.org/3/library/struct.html) notation):
 
 | Offset | Size | Type   | Field      | Range     | Notes |
 |--------|------|--------|------------|-----------|-------|
@@ -83,7 +83,7 @@ Each point is 16 bytes, big-endian (`struct.Struct(">ffBBHI")`):
 | 10     | 2    | u16 BE | pressure   | 0–4095    | Stylus pressure (hardware max 4095) |
 | 12     | 4    | u32 BE | time_delta | ms        | Time delta from previous point |
 
-**Coordinate system:** Coordinates are already in PDF points (1:1 mapping to the exported PDF). Despite the 1404×1872 display resolution, the stored coordinates span the full 1860×2480 PDF page — no scaling is needed. Observed ranges: x ≈ 0–1860, y ≈ 0–2480. (The ~1.325 scale factor mentioned in early analysis was incorrect; direct comparison of calibration.note points to calibration.pdf path segments confirmed exact 1:1 correspondence.)
+**Coordinate system:** Coordinates are in PDF points (1:1 mapping to device-exported PDFs). Despite the 1404×1872 display resolution, the stored coordinates span the full 1860×2480 page. Observed ranges: x ≈ 0–1860, y ≈ 0–2480. Verified by direct comparison of `.note` point coordinates against device-exported PDF path segments.
 
 **Tilt wrapping:** Tilt values wrap at 256 (e.g., 254 → 0 is a +2 change, not -254). Continuous tilt must be unwrapped with modular arithmetic before interpolation.
 
@@ -129,7 +129,7 @@ Blue  = (color      ) & 0xFF
   "pressureSensitivity": ...
 }
 ```
-Not all strokes have pen config — some (observed ~6/52 in one file) lack it entirely. On some devices/firmware versions this field may contain a simpler `displayScale`-only JSON (with `maxPressure`, `revisedDisplayScale`, `source`).
+Not all strokes have pen config — a minority lack it entirely. On some devices/firmware versions this field may contain a simpler `displayScale`-only JSON (with `maxPressure`, `revisedDisplayScale`, `source`).
 
 **Ordering:** Shape protobuf submessage order may differ from the `#points` index order. They are cross-referenced by shapeUUID (protobuf field 1 = index UUID).
 
@@ -198,28 +198,28 @@ Multi-note archives use a `note_tree` file whose protobuf wraps repeated note me
 
 ### Pen Types
 
-Field 12 in the shape protobuf identifies the brush tool. Observed values and their PDF export behavior (determined by pairing `calibration.note` strokes with their `calibration.pdf` counterparts):
+Field 12 in the shape protobuf identifies the brush tool. Observed values and their rendering behavior (determined by comparing `.note` stroke data against device-exported PDFs):
 
-| pen_type | Brush Name (approx) | PDF Export | Notes |
-|----------|---------------------|------------|-------|
-| 2  | Ballpoint / Fineliner | Stroked line segments, constant width | Pressure-agnostic. Width = thickness. Each stroke is one multi-segment path or chained single-segment paths. |
-| 5  | Fountain Pen | Stroked line segments, varying width per segment | Pressure-sensitive. Each point becomes a separate line-segment drawing op with width derived from pressure. |
-| 15 | Highlighter | Stroked line segments, constant width | Very thick (e.g., 59pt). Constant width = thickness. Fewer segments than points (some are merged). |
-| 21 | Marker | Stroked line segments, varying width per segment | Pressure-sensitive, similar to pen_type 5. Width range observed 7–17pt from thickness 7pt. |
-| 22 | Charcoal / Calligraphy | Per-stroke raster (Stamp annotation) | Tilt-sensitive. See **Charcoal Raster Rendering** section below. |
-| 37 | Fill | Scanline fill rectangles | Points are interleaved scanline pairs: even-indexed = left edge, odd-indexed = right edge. Each pair defines one horizontal fill span. Multiple colors observed. Thickness always 1.0. |
-| 60 | Calligraphy Brush A | Filled polygon (no stroke) | Tilt-sensitive. Outline is exported as a closed filled path (~5x more segments than input points). No per-segment widths. |
-| 61 | Calligraphy Brush B | Filled polygon (no stroke) | Tilt-sensitive. Same as 60 but different fill tessellation. Also ~5x segment expansion. |
+| pen_type | Brush Name (approx) | Rendering | Notes |
+|----------|---------------------|-----------|-------|
+| 2  | Ballpoint / Fineliner | Stroked line segments, constant width | Pressure-agnostic. Width = thickness. |
+| 5  | Fountain Pen | Stroked line segments, varying width per segment | Pressure-sensitive. Width derived from pressure per point. |
+| 15 | Highlighter | Stroked line segments, constant width | Very thick. Constant width = thickness. Multiply blend mode at ~50% opacity. |
+| 21 | Marker | Stroked line segments, varying width per segment | Pressure-sensitive, similar to pen_type 5. |
+| 22 | Charcoal | Per-stroke raster image | Tilt-sensitive. See **Charcoal Raster Rendering** section below. |
+| 37 | Fill | Scanline fill rectangles | Points are interleaved scanline pairs: even-indexed = left edge, odd-indexed = right edge. Each pair defines one horizontal fill span. Thickness always 1.0. |
+| 60 | Calligraphy Brush A | Filled polygon (no stroke) | Tilt-sensitive. Closed filled path (~5x more segments than input points). No per-segment widths. |
+| 61 | Calligraphy Brush B | Filled polygon (no stroke) | Tilt-sensitive. Same as 60 but different fill tessellation. |
 
-**PDF export summary:**
-- **Stroked types** (2, 5, 15, 21): Each note point maps to approximately one PDF line segment. Width is either constant (types 2, 15) or derived from pressure (types 5, 21).
+**Rendering summary:**
+- **Stroked types** (2, 5, 15, 21): Each point maps to approximately one line segment. Width is either constant (types 2, 15) or derived from pressure (types 5, 21).
 - **Fill type** (37): Points encode a scanline fill — even/odd interleaved pairs define horizontal spans that tile the filled region.
 - **Filled types** (60, 61): The stroke outline is tessellated into a closed polygon. Segment count is much larger than point count (~5x). No per-segment width — the shape is filled.
-- **Raster types** (22): Each stroke is a separate raster image in a Stamp annotation. See **Charcoal Raster Rendering** below.
+- **Raster types** (22): Each stroke is a separate raster image. See **Charcoal Raster Rendering** below.
 
 ### Width Formulas (Pressure-Sensitive Pens)
 
-Fitted from calibration.note ↔ calibration.pdf stroke pairing. Thickness values in `.note` are already in PDF points — no scaling needed.
+Fitted by comparing `.note` stroke data against device-exported PDF output. Thickness values in `.note` are already in PDF points — no scaling needed.
 
 | pen_type | Formula | Params | RMSE |
 |----------|---------|--------|------|
@@ -228,73 +228,33 @@ Fitted from calibration.note ↔ calibration.pdf stroke pairing. Thickness value
 | 15 (Highlighter) | `w = thickness` (constant) | — | exact |
 | 21 (Marker) | `w = thickness × 2.35 × (pressure/4095)^0.43` | k=2.35, exp=0.43 | 1.207 |
 
-For variable-width pens (5, 21), each PDF segment uses the average pressure of its two endpoints. Width is clamped to a minimum of 0.5pt.
+For variable-width pens (5, 21), each segment uses the average pressure of its two endpoints. Width is clamped to a minimum of 0.5pt.
 
 ### Charcoal Raster Rendering (pen_type=22)
 
-Charcoal strokes are **not** rendered as vector paths. In device-exported PDFs, each charcoal stroke is a separate **Stamp annotation** (`/Name /#23ONYX-STROKE`) containing a raster image.
-
-**PDF structure per charcoal stroke:**
-```
-Stamp annotation (rect = stroke bounding box + margin)
-  └── Form XObject (appearance stream, /N)
-       └── Form XObject (/FRM)
-            └── Image XObject (/Im0) + SMask (alpha mask)
-```
-
-**Image properties:**
-- The RGB image is a **single solid color** matching the stroke's ARGB color — all visible pixels have the exact same RGB value
-- The alpha mask (SMask) is **binary** (only values 0 and 255) — no anti-aliasing or intermediate alpha
-- The texture effect (charcoal "grain") comes entirely from **which pixels have alpha=255** in the mask
-- Image size matches the annotation bounding box at ~1:1 pixel-to-point (e.g., a 1143×249pt annotation has a 1079×235px image, scale ≈ 1.06)
-- Visible pixels are sparse (~7–12% of the bounding box area), scattered in a pattern that follows the stroke path
+Charcoal strokes are **not** rendered as vector paths. On the device, each charcoal stroke is exported as a raster image: a solid-color RGB layer with a binary alpha mask that creates the "grain" texture.
 
 **Texture characteristics:**
-- The mask forms a scattered dot pattern along the stroke path — sparse individual pixels with gaps (mean gap ~6–10 pixels between visible pixels in a row)
+- The alpha mask forms a scattered dot pattern along the stroke path — sparse individual pixels with gaps between them
 - Density varies along the stroke, roughly correlating with pressure
 - The pattern resembles charcoal on textured paper — not a solid filled path
-- tilt_x wraps near 0/255 (e.g., stroke 0: tilt_x=0–10, stroke 1: tilt_x=250–255 wrapping to 0). tilt_y stays in a narrow range (21–33)
-- The exact algorithm mapping (x, y, tilt_x, tilt_y, pressure) → pixel mask is still unknown, but the texture appears to be a deterministic scattered pattern based on position and tilt
+- `tilt_x` encodes pen azimuth (wraps near 0/255); `tilt_y` encodes elevation (narrow range)
+- The exact algorithm mapping (position, tilt, pressure) → pixel mask is unknown, but the texture appears to be a deterministic scattered pattern
 
-**Rendering approach (render_note.py):**
-Charcoal is approximated with procedural stippling: random dots are scattered along the stroke path within the pressure-dependent width envelope. Dot density is proportional to segment length × width (0.15 dots per unit area). Dot radius varies randomly between 0.4–1.4pt. The RNG is seeded per-stroke (from UUID) for deterministic output. This produces a visually similar scattered grain effect without reverse-engineering the exact device algorithm.
+**Rendering approach:**
+Charcoal is approximated with procedural stippling: random dots are scattered along the stroke path within the pressure-dependent width envelope using a tiled charcoal-grain canvas pattern. The RNG is seeded per-stroke (from UUID) for deterministic output. This produces a visually similar scattered grain effect without reverse-engineering the exact device algorithm.
 
 ### Calligraphy Brush Rendering (pen_type=60, 61)
 
-Calligraphy brushes use a **chisel-tip model** where stroke width depends on the angle between the stroke direction and the pen's tilt azimuth (tilt_x). When the stroke is perpendicular to the chisel edge, the line is thick; when parallel, it becomes a thin hairline.
+See **[calligraphy.md](calligraphy.md)** for the detailed chisel-tip model, width formula, smoothing pipeline, and known limitations.
 
-**Tilt data:** `tilt_x` encodes the pen azimuth with 256 units = full circle. Values are small integers (typically 0–25) and may wrap around 0/255. The `unwrap_8bit()` function handles phase continuity.
+### Page Geometry & Coordinate Mapping
 
-**Width formula:**
-```
-tx_rad = tilt_x × (2π / 256)
-tilt_vec = (cos(tx_rad), sin(tx_rad))
-chisel = |dot(stroke_normal, tilt_vec)|     # 0=hairline, 1=full width
-base_w = thickness × 1.37 × (pressure/4095)^0.59
-half_width = base_w × (0.07 + 0.93 × chisel)
-```
+The page size is **1860 x 2480 points** (approximately 25.83 x 34.44 inches at 72 DPI). Coordinates in `.note` files map 1:1 to device-exported PDF coordinates — no scaling is needed.
 
-The stroke is rendered as a filled polygon outline built from left/right offset curves at ±half_width along the stroke normals.
+### Stroke Z-Ordering
 
-### PDF Page Geometry & Coordinate Mapping
-
-Device-exported PDFs use a page size of **1860 x 2480 points** (approximately 25.83 x 34.44 inches at 72 DPI). Coordinates in `.note` files are **already in PDF points** — no scaling is needed:
-- `pdf_x = note_x` (1:1)
-- `pdf_y = note_y` (1:1)
-
-Verified by direct comparison: calibration.note point coordinates match calibration.pdf path segment coordinates exactly.
-
-### PDF Annotation Structure & Z-Ordering
-
-Device-exported PDFs store **all strokes as PDF annotations**, not in the page content stream. The page content stream only contains the background raster image (1860×2480, DeviceRGB, mostly black).
-
-**Annotation types used:**
-- **Stamp** (`/Name /#23ONYX-STROKE`): Used for fountain pen, brush, marker, charcoal, and highlighter strokes. The appearance stream contains the vector paths or raster image.
-- **Ink** (`/InkList`): Used for ballpoint/fineliner strokes.
-
-**Z-ordering:** Annotations are rendered bottom-to-top in list order. The annotation order matches the stroke drawing order from the `.note` file. Later strokes render on top of earlier ones.
-
-**Blend modes:** Most annotations use Normal blending. The highlighter uses `/BM /Multiply` with `/CA 0.498039` (≈50% opacity), which creates the see-through highlighting effect where underlying strokes remain visible.
+Strokes are rendered bottom-to-top in the order they appear in the `.note` file. Later strokes render on top of earlier ones. Most stroke types use normal blending; the highlighter uses multiply blending at ~50% opacity.
 
 ### Stash (Undo History)
 
@@ -302,7 +262,7 @@ Device-exported PDFs store **all strokes as PDF annotations**, not in the page c
 
 ### Older Backup Format (different!)
 
-`OnyxNoteRenderer/` handles a **different** format: SQLite-based `.note` backup files where points are `Nx6 float32` (byteswapped) in a `NewShapeModel` table, with coordinates in normalized 0–1 range (scaled by 792 for letter-size PDF). This is the cloud backup/export format, not the same as standalone `.note` ZIP files from the device.
+The [OnyxNoteRenderer](https://github.com/RobertCsordas/OnyxNoteRenderer) project handles a **different** format: SQLite-based `.note` backup files where points are `Nx6 float32` (byteswapped) in a `NewShapeModel` table, with coordinates in normalized 0–1 range. This is the cloud backup/export format, not the same as standalone `.note` ZIP files from the device.
 
 Key differences from the standalone format:
 - SQLite database vs ZIP archive

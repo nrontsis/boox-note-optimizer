@@ -17,8 +17,8 @@ This corresponds to two nib orientations rotated 90 degrees from each other: pen
 
 ## Tilt Data
 
-- `tilt_x` (column 3): Pen azimuth, 256 units = full circle. Raw values wrap at 0/255; must be unwrapped with `unwrap_8bit()` before use.
-- `tilt_y` (column 4): Pen elevation, 256 units. Typical range 15-34. Not currently used in the width model (minimal measured effect on stroke width).
+- `tilt_x`: Pen azimuth, 256 units = full circle. Raw values wrap at 0/255; must be unwrapped with `unwrap_8bit()` before use.
+- `tilt_y`: Pen elevation, 256 units. Typical range 15-34. Not currently used in the width model (minimal measured effect on stroke width).
 - Nib angle: `nib_angle = tilt_x * (2*pi / 256)`
 
 ## Width Formula
@@ -31,15 +31,13 @@ min_frac  = 0.18 (pen 60) or 0.35 (pen 61)
 half_width = nib_w * (min_frac + (1 - min_frac) * chisel) / 2
 ```
 
-Fitted from `calibration.note` vs `calibration.png` gold output:
-- Pen 60: RMSE = 0.32px on straight sections (thickness=5.9)
-- Pen 61: RMSE = 0.58px on straight sections (thickness=12.4)
+Fitted by comparing `.note` stroke data against device-exported output. Typical RMSE on straight sections is ~0.3–0.6px.
 
 ## Rendering Method
 
 **Device export:** Filled polygon (closed path with ~5x more segments than input points). No per-segment strokes. The outline naturally expands at turns/corners.
 
-**Our approach:** `_build_stroke_outline()` builds a variable-width polygon from per-segment quadrilaterals with round end caps. This reproduces the device behavior:
+**Our approach:** `fill_stroke_outline()` (in `src/lib.rs`) builds a variable-width polygon from per-segment quadrilaterals with round end caps. This reproduces the device behavior:
 - No circle artifacts (unlike per-segment `drawLine` with round caps)
 - Natural width expansion at turns
 - Start-of-line taper (quadratic ramp over first 8 points)
