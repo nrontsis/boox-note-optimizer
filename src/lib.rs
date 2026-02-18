@@ -35,32 +35,37 @@ pub struct AppEngine {
     deb_notes: Vec<Note>,
     shape_meta: HashMap<String, ShapeMeta>,
     pages: Vec<String>,
-    charcoal_cache: HashMap<(u8, u8, u8), CanvasPattern>,
+    canvas_w: f32,
+    canvas_h: f32,
 }
 
 #[wasm_bindgen]
 impl AppEngine {
     #[wasm_bindgen(constructor)]
     pub fn new(zip_bytes: &[u8]) -> Result<AppEngine, JsValue> {
-        let mut archive = ZipArchive::new(Cursor::new(zip_bytes)).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let mut archive = ZipArchive::new(Cursor::new(zip_bytes)).map_err(|_| JsValue::from_str("Invalid ZIP file"))?;
         let mut notes = Vec::new();
         let mut shape_meta = HashMap::new();
+        let mut canvas_w = 1860.0;
+        let mut canvas_h = 2480.0;
 
         for i in 0..archive.len() {
-            let mut file = archive.by_index(i).unwrap();
+            let Ok(mut file) = archive.by_index(i) else { continue; };
             let name = file.name().to_string();
 
             if name.ends_with("#points") {
-                let mut data = Vec::new(); file.read_to_end(&mut data).unwrap();
-                notes.push(Self::parse_points(&data, &name));
+                let mut data = Vec::new(); if file.read_to_end(&mut data).is_err() { continue; }
+                if let Ok(note) = Self::parse_points(&data, &name) { notes.push(note); }
             } else if name.ends_with(".zip") && name.contains("shape") && !name.contains("stash") {
-                let mut z_data = Vec::new(); file.read_to_end(&mut z_data).unwrap();
+                let mut z_data = Vec::new(); if file.read_to_end(&mut z_data).is_err() { continue; }
                 if let Ok(mut inner) = ZipArchive::new(Cursor::new(&z_data)) {
                     for j in 0..inner.len() {
-                        let mut sh_data = Vec::new(); inner.by_index(j).unwrap().read_to_end(&mut sh_data).unwrap();
-                        Self::parse_protobuf(&sh_data, &mut shape_meta);
+                        let Ok(mut sf) = inner.by_index(j) else { continue; };
+                        let mut sh_data = Vec::new(); if sf.read_to_end(&mut sh_data).is_ok() { Self::parse_protobuf(&sh_data, &mut shape_meta); }
                     }
                 }
+            } else if name.ends_with("note_info") || name == "note_tree" {
+                let mut d = Vec::new(); if file.read_to_end(&mut d).is_ok() { Self::parse_note_info(&d, &mut canvas_w, &mut canvas_h); }
             }
         }
 
@@ -72,33 +77,32 @@ impl AppEngine {
             }
         }
 
-        Ok(AppEngine { zip_bytes: zip_bytes.to_vec(), deb_notes: notes.clone(), notes, shape_meta, pages, charcoal_cache: HashMap::new() })
+        Ok(AppEngine { zip_bytes: zip_bytes.to_vec(), deb_notes: notes.clone(), notes, shape_meta, pages, canvas_w, canvas_h })
     }
 
-    pub fn debloat(&mut self, threshold: f32, press_eq: f32, tilt_eq: f32) {
-        // Physical Equivalence: Delta change equating geometrically to exactly 1 pixel of error.
+    pub fn get_canvas_width(&self) -> f32 { self.canvas_w }
+    pub fn get_canvas_height(&self) -> f32 { self.canvas_h }
+    pub fn prepare_debloat(&mut self) { self.deb_notes = self.notes.clone(); }
+    pub fn get_note_count(&self) -> usize { self.notes.len() }
+
+    pub fn debloat_note(&mut self, idx: usize, threshold: f32, press_eq: f32, tilt_eq: f32) {
+        if idx >= self.notes.len() { return; }
         let p_scale = 1.0 / press_eq;
         let t_scale = 1.0 / tilt_eq;
 
-        self.deb_notes = self.notes.iter().map(|nd| {
-            let mut new_strokes = Vec::new();
-            for stroke in &nd.strokes {
-                if stroke.points.len() < 3 { new_strokes.push(stroke.clone()); continue; }
+        let stroke_data = &self.notes[idx];
+        let mut new_strokes = Vec::new();
 
-                let u_tx = Self::unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_x as f32).collect::<Vec<_>>());
-                let u_ty = Self::unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_y as f32).collect::<Vec<_>>());
-                
-                let math_pts: Vec<[f32; 5]> = stroke.points.iter().enumerate().map(|(i, p)| {
-                    [p.x, p.y, p.pressure as f32 * p_scale, u_tx[i] * t_scale, u_ty[i] * t_scale]
-                }).collect();
-
-                let mask = Self::decimate(&math_pts, threshold);
-                
-                let opt_pts: Vec<Point> = stroke.points.iter().enumerate().filter(|(i, _)| mask[*i]).map(|(_, p)| p.clone()).collect();
-                new_strokes.push(Stroke { uuid: stroke.uuid.clone(), points: opt_pts });
-            }
-            Note { path: nd.path.clone(), header: nd.header.clone(), strokes: new_strokes }
-        }).collect();
+        for stroke in &stroke_data.strokes {
+            if stroke.points.len() < 3 { new_strokes.push(stroke.clone()); continue; }
+            let u_tx = Self::unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_x as f32).collect::<Vec<_>>());
+            let u_ty = Self::unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_y as f32).collect::<Vec<_>>());
+            let math_pts: Vec<[f32; 5]> = stroke.points.iter().enumerate().map(|(i, p)| { [p.x, p.y, p.pressure as f32 * p_scale, u_tx[i] * t_scale, u_ty[i] * t_scale] }).collect();
+            let mask = Self::decimate(&math_pts, threshold);
+            let opt_pts: Vec<Point> = stroke.points.iter().enumerate().filter(|(i, _)| mask[*i]).map(|(_, p)| p.clone()).collect();
+            new_strokes.push(Stroke { uuid: stroke.uuid.clone(), points: opt_pts });
+        }
+        self.deb_notes[idx] = Note { path: stroke_data.path.clone(), header: stroke_data.header.clone(), strokes: new_strokes };
     }
 
     pub fn get_orig_points(&self) -> usize { self.notes.iter().flat_map(|n| &n.strokes).map(|s| s.points.len()).sum() }
@@ -107,9 +111,9 @@ impl AppEngine {
 
     pub fn render_page(&mut self, canvas: &HtmlCanvasElement, use_deb: bool, page_idx: usize, simplified: bool) {
         let ctx = canvas.get_context("2d").unwrap().unwrap().dyn_into::<CanvasRenderingContext2d>().unwrap();
-        ctx.clear_rect(0.0, 0.0, 1860.0, 2480.0);
+        ctx.clear_rect(0.0, 0.0, self.canvas_w as f64, self.canvas_h as f64);
         ctx.set_fill_style(&JsValue::from_str("#ffffff"));
-        ctx.fill_rect(0.0, 0.0, 1860.0, 2480.0);
+        ctx.fill_rect(0.0, 0.0, self.canvas_w as f64, self.canvas_h as f64);
         ctx.set_line_cap("round"); ctx.set_line_join("round");
 
         if page_idx >= self.pages.len() { return; }
@@ -128,13 +132,13 @@ impl AppEngine {
 
             ctx.save();
             ctx.set_global_alpha(meta.color_rgba.3 as f64);
-            if meta.pen_type == 15 { 
-                ctx.set_global_composite_operation("multiply").unwrap(); 
-                ctx.set_global_alpha(meta.color_rgba.3 as f64 * 0.5); 
+            if meta.pen_type == 15 {
+                ctx.set_global_composite_operation("multiply").unwrap();
+                ctx.set_global_alpha(meta.color_rgba.3 as f64 * 0.5);
             }
-            
+
             let col = format!("rgb({},{},{})", meta.color_rgba.0, meta.color_rgba.1, meta.color_rgba.2);
-            ctx.set_stroke_style(&JsValue::from_str(&col)); 
+            ctx.set_stroke_style(&JsValue::from_str(&col));
             ctx.set_fill_style(&JsValue::from_str(&col));
 
             let u_tx = Self::unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_x as f32).collect::<Vec<_>>());
@@ -193,12 +197,12 @@ impl AppEngine {
                     let half_w: Vec<f32> = widths.iter().map(|w| w / 2.0).collect();
                     Self::fill_stroke_outline(&ctx, &pts, &half_w);
                 },
-                22 => { // Explicit disjoint struct mutable borrow passed flawlessly
+                22 => {
                     let n = pts.len();
                     let mut half_w = vec![0.0; n];
                     for i in 0..n { half_w[i] = ((meta.thickness * 1.37 * (pts[i][2]/4095.0).powf(0.59)).max(0.5)) / 2.0; }
-                    
-                    let pat = Self::get_charcoal_pattern(&mut self.charcoal_cache, &ctx, meta.color_rgba.0, meta.color_rgba.1, meta.color_rgba.2);
+
+                    let pat = Self::get_charcoal_pattern(&ctx, meta.color_rgba.0, meta.color_rgba.1, meta.color_rgba.2, &stroke.uuid);
                     ctx.set_fill_style(&pat);
                     Self::fill_stroke_outline(&ctx, &pts, &half_w);
                 },
@@ -236,30 +240,27 @@ impl AppEngine {
         }
     }
 
-    pub fn export(&self) -> js_sys::Uint8Array {
+    pub fn export(&self) -> Result<js_sys::Uint8Array, JsValue> {
         let mut out = Vec::new();
         {
             let mut wr = ZipWriter::new(Cursor::new(&mut out));
             let opt = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-            let mut arc = ZipArchive::new(Cursor::new(&self.zip_bytes)).unwrap();
+            let mut arc = ZipArchive::new(Cursor::new(&self.zip_bytes)).map_err(|_| JsValue::from_str("ZIP err"))?;
             let r_map: HashMap<_, _> = self.deb_notes.iter().map(|nd| (nd.path.clone(), Self::build_points(nd))).collect();
 
             for i in 0..arc.len() {
-                let mut f = arc.by_index(i).unwrap(); let name = f.name().to_string();
+                let Ok(mut f) = arc.by_index(i) else { continue; }; let name = f.name().to_string();
                 if name.contains("/stash/") { continue; }
-                wr.start_file(&name, opt).unwrap();
-                if let Some(d) = r_map.get(&name) { wr.write_all(d).unwrap(); } 
-                else { let mut b = Vec::new(); f.read_to_end(&mut b).unwrap(); wr.write_all(&b).unwrap(); }
+                if wr.start_file(&name, opt).is_err() { continue; }
+                if let Some(d) = r_map.get(&name) { wr.write_all(d).unwrap(); }
+                else { let mut b = Vec::new(); if f.read_to_end(&mut b).is_ok() { wr.write_all(&b).unwrap(); } }
             }
-            wr.finish().unwrap();
+            if wr.finish().is_err() { return Err(JsValue::from_str("ZIP finish err")); }
         }
-        js_sys::Uint8Array::from(out.as_slice())
+        Ok(js_sys::Uint8Array::from(out.as_slice()))
     }
 
-    fn get_charcoal_pattern(cache: &mut HashMap<(u8, u8, u8), CanvasPattern>, ctx: &CanvasRenderingContext2d, r: u8, g: u8, b: u8) -> CanvasPattern {
-        let key = (r, g, b);
-        if let Some(pat) = cache.get(&key) { return pat.clone(); }
-
+    fn get_charcoal_pattern(ctx: &CanvasRenderingContext2d, r: u8, g: u8, b: u8, uuid: &str) -> CanvasPattern {
         let doc = web_sys::window().unwrap().document().unwrap();
         let cvs = doc.create_element("canvas").unwrap().dyn_into::<HtmlCanvasElement>().unwrap();
         cvs.set_width(64); cvs.set_height(64);
@@ -270,24 +271,23 @@ impl AppEngine {
         t_ctx.set_global_composite_operation("destination-out").unwrap();
         t_ctx.set_fill_style(&JsValue::from_str("black"));
 
+        // Seed RNG organically from the stroke's UUID to prevent static background tiling
         let mut seed = 0x43484152u32;
+        for byte in uuid.bytes() { seed = seed.wrapping_mul(31).wrapping_add(byte as u32); }
         let mut rand = || -> f32 {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             (seed as f64 / std::u32::MAX as f64) as f32
         };
-        
+
         t_ctx.begin_path();
         let n_dots = (64.0 * 64.0 * 0.3) as usize;
         for _ in 0..n_dots {
             let cx = rand() * 64.0; let cy = rand() * 64.0; let rad = rand() * 0.5 + 0.3;
             t_ctx.move_to((cx + rad) as f64, cy as f64);
-            t_ctx.arc(cx as f64, cy as f64, rad as f64, 0.0, 2.0 * std::f64::consts::PI).unwrap();
+            t_ctx.arc_with_anticlockwise(cx as f64, cy as f64, rad as f64, 0.0, 2.0 * std::f64::consts::PI, false).unwrap();
         }
         t_ctx.fill();
-
-        let pattern = ctx.create_pattern_with_html_canvas_element(&cvs, "repeat").unwrap().unwrap();
-        cache.insert(key, pattern.clone());
-        pattern
+        ctx.create_pattern_with_html_canvas_element(&cvs, "repeat").unwrap().unwrap()
     }
 
     fn smooth_angle_ema(angles: &[f32], alpha: f32) -> Vec<f32> {
@@ -304,26 +304,37 @@ impl AppEngine {
         let n = pts.len(); if n < 2 { return; }
         let mut normals = vec![[0.0, 0.0]; n];
         for i in 0..n {
-            let (dx, dy) = if i == 0 { (pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]) } 
-            else if i == n - 1 { (pts[n-1][0] - pts[n-2][0], pts[n-1][1] - pts[n-2][1]) } 
+            let (dx, dy) = if i == 0 { (pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]) }
+            else if i == n - 1 { (pts[n-1][0] - pts[n-2][0], pts[n-1][1] - pts[n-2][1]) }
             else { (pts[i+1][0] - pts[i-1][0], pts[i+1][1] - pts[i-1][1]) };
             let len = dx.hypot(dy).max(1e-5); normals[i] = [-dy / len, dx / len];
         }
 
         ctx.begin_path();
-        for i in 0..n - 1 {
-            let (nx0, ny0) = (normals[i][0] * hw[i], normals[i][1] * hw[i]);
-            let (nx1, ny1) = (normals[i+1][0] * hw[i+1], normals[i+1][1] * hw[i+1]);
-            ctx.move_to((pts[i][0] + nx0) as f64, (pts[i][1] + ny0) as f64);
-            ctx.line_to((pts[i+1][0] + nx1) as f64, (pts[i+1][1] + ny1) as f64);
-            ctx.line_to((pts[i+1][0] - nx1) as f64, (pts[i+1][1] - ny1) as f64);
-            ctx.line_to((pts[i][0] - nx0) as f64, (pts[i][1] - ny0) as f64);
-            ctx.close_path();
-        }
-        ctx.fill();
 
-        ctx.begin_path(); ctx.arc(pts[0][0] as f64, pts[0][1] as f64, hw[0] as f64, 0.0, 2.0 * std::f64::consts::PI).unwrap(); ctx.fill();
-        ctx.begin_path(); ctx.arc(pts[n-1][0] as f64, pts[n-1][1] as f64, hw[n-1] as f64, 0.0, 2.0 * std::f64::consts::PI).unwrap(); ctx.fill();
+        // Forward pass (Right Edge)
+        for i in 0..n {
+            let (nx, ny) = (normals[i][0] * hw[i], normals[i][1] * hw[i]);
+            if i == 0 { ctx.move_to((pts[i][0] + nx) as f64, (pts[i][1] + ny) as f64); }
+            else { ctx.line_to((pts[i][0] + nx) as f64, (pts[i][1] + ny) as f64); }
+        }
+
+        // End Cap (Anticlockwise ensures a forward bulge bridging the sides)
+        let a_end = (normals[n-1][1] as f64).atan2(normals[n-1][0] as f64);
+        ctx.arc_with_anticlockwise(pts[n-1][0] as f64, pts[n-1][1] as f64, hw[n-1] as f64, a_end, a_end - std::f64::consts::PI, true).unwrap();
+
+        // Backward pass (Left Edge)
+        for i in (0..n).rev() {
+            let (nx, ny) = (normals[i][0] * hw[i], normals[i][1] * hw[i]);
+            ctx.line_to((pts[i][0] - nx) as f64, (pts[i][1] - ny) as f64);
+        }
+
+        // Start Cap (Anticlockwise ensures a backward bulge bridging the sides)
+        let a_start = (normals[0][1] as f64).atan2(normals[0][0] as f64);
+        ctx.arc_with_anticlockwise(pts[0][0] as f64, pts[0][1] as f64, hw[0] as f64, a_start - std::f64::consts::PI, a_start - 2.0 * std::f64::consts::PI, true).unwrap();
+
+        ctx.close_path();
+        ctx.fill();
     }
 
     fn decimate(pts: &[[f32; 5]], t: f32) -> Vec<bool> {
@@ -374,30 +385,47 @@ impl AppEngine {
         for i in 1..arr.len() { let d = arr[i] - arr[i-1]; cum += ((d + 128.0).rem_euclid(256.0)) - 128.0 - d; out[i] = arr[i] + cum; } out
     }
 
-    fn parse_points(data: &[u8], path: &str) -> Note {
-        let entries_start = Cursor::new(&data[data.len() - 4..]).read_u32::<BigEndian>().unwrap() as usize;
+    fn parse_points(data: &[u8], path: &str) -> Result<Note, JsValue> {
+        if data.len() < 76 { return Err(JsValue::from_str("data too short")); }
+        let entries_start = Cursor::new(&data[data.len() - 4..]).read_u32::<BigEndian>().map_err(|_| JsValue::from_str("Read err"))? as usize;
+        if entries_start > data.len() { return Err(JsValue::from_str("Invalid EOF index")); }
+
         let mut strokes = Vec::new();
-        for i in 0..(data.len() - 4 - entries_start) / 44 {
+        let num_strokes = (data.len() - 4 - entries_start) / 44;
+        for i in 0..num_strokes {
             let pos = entries_start + i * 44;
+            if pos + 44 > data.len() { break; }
             let uuid = String::from_utf8_lossy(&data[pos..pos+36]).to_string();
-            let offset = Cursor::new(&data[pos+36..pos+40]).read_u32::<BigEndian>().unwrap() as usize;
-            let size = Cursor::new(&data[pos+40..pos+44]).read_u32::<BigEndian>().unwrap() as usize;
-            
+            let Ok(offset) = Cursor::new(&data[pos+36..pos+40]).read_u32::<BigEndian>() else { continue; };
+            let Ok(size) = Cursor::new(&data[pos+40..pos+44]).read_u32::<BigEndian>() else { continue; };
+            let (offset, size) = (offset as usize, size as usize);
+
+            if offset + size > data.len() || size < 4 { continue; }
+
             let mut points = Vec::new(); let mut cum = 0.0;
             for j in 0..(size - 4) / 16 {
+                if offset + 4 + j * 16 + 16 > data.len() { break; }
                 let mut cur = Cursor::new(&data[offset + 4 + j * 16..]);
-                let (x, y, tx, ty, pr) = (cur.read_f32::<BigEndian>().unwrap(), cur.read_f32::<BigEndian>().unwrap(), cur.read_u8().unwrap(), cur.read_u8().unwrap(), cur.read_u16::<BigEndian>().unwrap());
-                cum += cur.read_u32::<BigEndian>().unwrap() as f64;
-                points.push(Point { x, y, tilt_x: tx, tilt_y: ty, pressure: pr, cum_time: cum });
+                if let (Ok(x), Ok(y), Ok(tx), Ok(ty), Ok(pr), Ok(dt)) = (
+                    cur.read_f32::<BigEndian>(), cur.read_f32::<BigEndian>(), cur.read_u8(), cur.read_u8(), cur.read_u16::<BigEndian>(), cur.read_u32::<BigEndian>()
+                ) {
+                    cum += dt as f64;
+                    points.push(Point { x, y, tilt_x: tx, tilt_y: ty, pressure: pr, cum_time: cum });
+                }
             }
             if !points.is_empty() { strokes.push(Stroke { uuid, points }); }
         }
-        Note { path: path.to_string(), header: data[..76].to_vec(), strokes }
+        Ok(Note { path: path.to_string(), header: data[..76].to_vec(), strokes })
     }
 
     fn decode_var(data: &[u8], off: &mut usize) -> u64 {
         let (mut r, mut s) = (0, 0);
-        while *off < data.len() { let b = data[*off]; *off += 1; r |= ((b & 0x7F) as u64) << s; if b & 0x80 == 0 { break; } s += 7; } r
+        while *off < data.len() {
+            let b = data[*off]; *off += 1;
+            r |= ((b & 0x7F) as u64) << s;
+            if b & 0x80 == 0 || s >= 63 { break; } // Prevent bitshift overflow panic!
+            s += 7;
+        } r
     }
 
     fn parse_protobuf(data: &[u8], meta: &mut HashMap<String, ShapeMeta>) {
@@ -420,6 +448,27 @@ impl AppEngine {
                     }
                 }
                 meta.insert(u, ShapeMeta { pen_type: pt, thickness: th, color_rgba: c, matrix: mat, created_ts: ts });
+            } else { match wt { 0 => { Self::decode_var(data, &mut off); }, 1 => off += 8, 2 => { let l = Self::decode_var(data, &mut off) as usize; off += l; }, 5 => off += 4, _ => break, } }
+        }
+    }
+
+    fn parse_note_info(data: &[u8], w: &mut f32, h: &mut f32) {
+        let mut off = 0;
+        while off < data.len() {
+            let tag = Self::decode_var(data, &mut off);
+            let (fn_num, wt) = ((tag >> 3) as u32, (tag & 0x07) as u8);
+            if fn_num == 1 && wt == 2 {
+                let l = Self::decode_var(data, &mut off) as usize;
+                let next_off = off.saturating_add(l);
+                if next_off <= data.len() { Self::parse_note_info(&data[off..next_off], w, h); }
+                off = next_off;
+            } else if (fn_num == 22 || fn_num == 23) && wt == 5 {
+                if off + 4 <= data.len() {
+                    let mut b = [0;4]; b.copy_from_slice(&data[off..off+4]);
+                    let val = f32::from_le_bytes(b);
+                    if val > 0.0 { if fn_num == 22 { *w = val; } else { *h = val; } }
+                    off += 4;
+                }
             } else { match wt { 0 => { Self::decode_var(data, &mut off); }, 1 => off += 8, 2 => { let l = Self::decode_var(data, &mut off) as usize; off += l; }, 5 => off += 4, _ => break, } }
         }
     }
