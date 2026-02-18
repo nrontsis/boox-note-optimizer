@@ -5,7 +5,7 @@ use std::io::{Cursor, Read, Write};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasPattern, CanvasRenderingContext2d, HtmlCanvasElement};
-use zip::{write::FileOptions, ZipArchive, ZipWriter};
+use zip::{write::SimpleFileOptions, ZipArchive, ZipWriter};
 
 #[derive(Clone)]
 struct Point { x: f32, y: f32, pressure: u16, tilt_x: u8, tilt_y: u8, cum_time: f64 }
@@ -112,7 +112,7 @@ impl AppEngine {
     pub fn render_page(&mut self, canvas: &HtmlCanvasElement, use_deb: bool, page_idx: usize) {
         let ctx = canvas.get_context("2d").unwrap().unwrap().dyn_into::<CanvasRenderingContext2d>().unwrap();
         ctx.clear_rect(0.0, 0.0, self.canvas_w as f64, self.canvas_h as f64);
-        ctx.set_fill_style(&JsValue::from_str("#ffffff"));
+        ctx.set_fill_style_str("#ffffff");
         ctx.fill_rect(0.0, 0.0, self.canvas_w as f64, self.canvas_h as f64);
         ctx.set_line_cap("round"); ctx.set_line_join("round");
 
@@ -138,8 +138,8 @@ impl AppEngine {
             }
 
             let col = format!("rgb({},{},{})", meta.color_rgba.0, meta.color_rgba.1, meta.color_rgba.2);
-            ctx.set_stroke_style(&JsValue::from_str(&col));
-            ctx.set_fill_style(&JsValue::from_str(&col));
+            ctx.set_stroke_style_str(&col);
+            ctx.set_fill_style_str(&col);
 
             let u_tx = Self::unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_x as f32).collect::<Vec<_>>());
             let pts: Vec<[f32; 5]> = stroke.points.iter().enumerate().map(|(i, p)| {
@@ -194,7 +194,7 @@ impl AppEngine {
                     for i in 0..n { half_w[i] = ((meta.thickness * 1.37 * (pts[i][2]/4095.0).powf(0.59)).max(0.5)) / 2.0; }
 
                     let pat = Self::get_charcoal_pattern(&ctx, meta.color_rgba.0, meta.color_rgba.1, meta.color_rgba.2, &stroke.uuid);
-                    ctx.set_fill_style(&pat);
+                    ctx.set_fill_style_canvas_pattern(&pat);
                     Self::fill_stroke_outline(&ctx, &pts, &half_w);
                 },
                 37 => { // Scanline Fill
@@ -235,7 +235,7 @@ impl AppEngine {
         let mut out = Vec::new();
         {
             let mut wr = ZipWriter::new(Cursor::new(&mut out));
-            let opt = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            let opt = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
             let mut arc = ZipArchive::new(Cursor::new(&self.zip_bytes)).map_err(|_| JsValue::from_str("ZIP err"))?;
             let r_map: HashMap<_, _> = self.deb_notes.iter().map(|nd| (nd.path.clone(), Self::build_points(nd))).collect();
 
@@ -257,10 +257,10 @@ impl AppEngine {
         cvs.set_width(64); cvs.set_height(64);
         let t_ctx = cvs.get_context("2d").unwrap().unwrap().dyn_into::<CanvasRenderingContext2d>().unwrap();
 
-        t_ctx.set_fill_style(&JsValue::from_str(&format!("rgb({},{},{})", r, g, b)));
+        t_ctx.set_fill_style_str(&format!("rgb({},{},{})", r, g, b));
         t_ctx.fill_rect(0.0, 0.0, 64.0, 64.0);
         t_ctx.set_global_composite_operation("destination-out").unwrap();
-        t_ctx.set_fill_style(&JsValue::from_str("black"));
+        t_ctx.set_fill_style_str("black");
 
         // Seed RNG organically from the stroke's UUID to prevent static background tiling
         let mut seed = 0x43484152u32;
