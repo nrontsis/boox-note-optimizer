@@ -7,6 +7,10 @@
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#ffffff">
     <link rel="apple-touch-icon" href="icon-192.png">
+    
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="https://apis.google.com/js/api.js" async defer onload="gapi.load('picker')"></script>
+    
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('sw.js');
@@ -210,13 +214,19 @@
                     </div>
                 </div>
 
-                <div class="flex items-center justify-center gap-4 text-xs font-bold text-gray-400 tracking-widest my-2">
+                <div class="flex items-center justify-center gap-4 text-xs font-bold text-gray-400 tracking-widest my-2 w-full max-w-md">
                     <div class="h-px w-8 md:w-12 bg-gray-300"></div>OR<div class="h-px w-8 md:w-12 bg-gray-300"></div>
                 </div>
                 
-                <button id="btnDemo" class="mb-6 md:mb-8 px-6 md:px-8 py-2.5 md:py-3 bg-white text-gray-800 border border-gray-200 font-bold text-sm md:text-base rounded-full shadow-sm hover:border-gray-300 hover:bg-gray-100 transition disabled:opacity-50" onclick="window.loadDemo(event)">
-                    Load Demo File
-                </button>
+                <div class="flex flex-col sm:flex-row items-center justify-center gap-3 md:gap-4 mb-6 md:mb-8 w-full max-w-md">
+                    <button id="btnDrive" class="w-full sm:w-1/2 flex items-center justify-center gap-2.5 px-6 py-2.5 md:py-3 bg-white text-gray-800 border border-gray-200 font-bold text-sm md:text-base rounded-full shadow-sm hover:border-blue-400 hover:bg-blue-50 transition disabled:opacity-50">
+                        <span id="txtDrive">Google Drive</span>
+                    </button>
+
+                    <button id="btnDemo" class="w-full sm:w-1/2 px-6 py-2.5 md:py-3 bg-white text-gray-800 border border-gray-200 font-bold text-sm md:text-base rounded-full shadow-sm hover:border-gray-300 hover:bg-gray-100 transition disabled:opacity-50" onclick="window.loadDemo(event)">
+                        Load Demo File
+                    </button>
+                </div>
 
                 <div class="max-w-lg w-full px-5 md:px-6 pb-6 md:pb-8">
                     <div class="bg-gray-50 p-5 md:p-6 rounded-2xl border border-gray-200">
@@ -295,6 +305,7 @@
     </div>
 
     <div id="modalBackdrop" class="fixed inset-0 bg-gray-900/60 z-[100] hidden items-center justify-center p-4 backdrop-blur-sm transition-opacity opacity-0" onclick="if(event.target===this) closeModal()">
+        
         <div id="modalExplain" class="hidden bg-white rounded-2xl shadow-2xl max-w-2xl w-full flex-col overflow-hidden relative transform transition-transform scale-95 modal-content">
             <button onclick="closeModal()" class="absolute top-6 right-6 text-gray-400 hover:text-black transition">✖</button>
             <div class="p-8 pb-6 border-b border-gray-100 bg-gray-50">
@@ -333,6 +344,9 @@
     
     <script type="module">
         import init, { AppEngine } from './pkg/boox_optimizer.js';
+        const GOOGLE_CLIENT_ID = '189410272086-fcshg7ebslcfh6o7qof8i34eqia6bdmm.apps.googleusercontent.com';
+        const GOOGLE_API_KEY = 'AIzaSyD9Gyrlihf8Xim_rHcLixLKSiVBCfYUqPA';
+        const GOOGLE_APP_ID = GOOGLE_CLIENT_ID.split('-')[0]; // Auto-extracts the project number
 
         (async function() {
 
@@ -365,7 +379,9 @@
             
             paginator: document.getElementById('paginator'), pageText: document.getElementById('pageText'), btnResetZoom: document.getElementById('btnResetZoom'),
             btnDlNote: document.getElementById('btnDlNote'), btnOptPng: document.getElementById('btnOptPng'),
-            exportVisualsSection: document.getElementById('exportVisualsSection'), btnReportIssue: document.getElementById('btnReportIssue')
+            exportVisualsSection: document.getElementById('exportVisualsSection'), btnReportIssue: document.getElementById('btnReportIssue'),
+
+            btnDrive: document.getElementById('btnDrive'), txtDrive: document.getElementById('txtDrive')
         };
 
         const formatBytes = (bytes) => {
@@ -374,7 +390,102 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + ['B', 'KB', 'MB'][i];
         };
 
-        // CRITICAL FIX: Asynchronous Revocation & Proper DOM attachment.
+        let tokenClient;
+        let oauthToken = null;
+
+        if (ui.btnDrive) {
+            ui.btnDrive.onclick = (e) => {
+                e.preventDefault();
+                
+                if (GOOGLE_CLIENT_ID.includes('YOUR_') || GOOGLE_API_KEY.includes('YOUR_')) {
+                    return alert("Developer Setup Required: Please configure your Google Client ID and API Key in the source code.");
+                }
+
+                if (typeof google === 'undefined' || typeof gapi === 'undefined' || !window.gapi.picker) {
+                    return alert("Google APIs are still loading or are blocked. Please try again in a moment.");
+                }
+
+                if (!tokenClient) {
+                    tokenClient = google.accounts.oauth2.initTokenClient({
+                        client_id: GOOGLE_CLIENT_ID,
+                        // drive.file scope prevents the app from being marked as Restricted by Google.
+                        // It only grants access to the explicit file the user picks.
+                        scope: 'https://www.googleapis.com/auth/drive.file',
+                        callback: (response) => {
+                            if (response.error) return alert("Google Drive authentication failed.");
+                            oauthToken = response.access_token;
+                            createPicker();
+                        }
+                    });
+                }
+
+                if (oauthToken) {
+                    createPicker();
+                } else {
+                    tokenClient.requestAccessToken();
+                }
+            };
+        }
+
+        function createPicker() {
+            // Combine both MIME types and the specific query
+            const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+                .setMode(google.picker.DocsViewMode.LIST)
+                .setIncludeFolders(false)
+                // Some of these is the correct type :laugh:
+                .setMimeTypes('application/zip,application/x-zip-compressed,application/x-zip,application/octet-stream')
+                .setQuery('*.note');
+
+            const picker = new google.picker.PickerBuilder()
+                .addView(view)
+                .setOAuthToken(oauthToken)
+                .setDeveloperKey(GOOGLE_API_KEY)
+                .setAppId(GOOGLE_APP_ID)
+                .setCallback(pickerCallback)
+                .build();
+                
+            picker.setVisible(true);
+        }
+
+        async function pickerCallback(data) {
+            if (data.action === google.picker.Action.PICKED) {
+                const doc = data.docs[0];
+                const id = doc.id;
+                const name = doc.name;
+                const size = doc.sizeBytes || 0;
+
+                const originalText = ui.txtDrive.innerText;
+                ui.txtDrive.innerText = "Downloading...";
+                ui.btnDrive.disabled = true;
+
+                try {
+                    // ?alt=media requests the raw file binary payload
+                    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, {
+                        headers: { 'Authorization': `Bearer ${oauthToken}` }
+                    });
+                    
+                    if (res.status === 401) {
+                        oauthToken = null;
+                        throw new Error("Session expired. Please click Google Drive to re-authenticate.");
+                    }
+                    if (!res.ok) throw new Error("Failed to securely download file from Drive.");
+                    
+                    // Directly pipelined to local browser memory!
+                    const ab = await res.arrayBuffer();
+                    
+                    filename = name.replace('.note', '');
+                    originalFileSize = parseInt(size || ab.byteLength);
+                    
+                    loadBuffer(new Uint8Array(ab));
+                } catch (err) {
+                    alert(err.message);
+                } finally {
+                    ui.txtDrive.innerText = originalText;
+                    ui.btnDrive.disabled = false;
+                }
+            }
+        }
+
         function downloadUrl(url, name) { 
             const a = document.createElement('a'); 
             a.style.display = 'none';
