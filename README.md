@@ -2,14 +2,20 @@
 
 ✨ **[Try the Web App Live Here!](https://nrontsis.github.io/boox-note-optimizer)** ✨
 
+## Overview
+
+A `.note` file is a ZIP archive produced by Boox/Onyx e-ink tablets. It stores handwritten strokes as sequences of pressure/tilt-sensitive points, plus per-stroke metadata (pen type, color, thickness, transform) in protobuf. The rendering model is pen-type-dependent: some pens produce constant-width line segments, others produce pressure-modulated variable-width strokes, filled polygons, raster textures, or scanline fills.
+
+This document describes the file format and rendering rules inferred from examining `.note` files and comparing against device-exported PDFs.
+
 ## Boox `.note` File Format
 
-Infered from multiple test files and cross-referenced against device-exported PDFs. The following related repos were particularly helpful:
+Inferred from multiple test files and cross-referenced against device-exported PDFs. The following related repos were particularly helpful:
 - https://github.com/RobertCsordas/OnyxNoteRenderer
 - https://github.com/hhornbacher/boox-note-parser
 
-> [!WARNING]  
-> Details might vary across firmware versions - this repo was only tested with Note Air 5c files generated with latest firmware as of 2026/02/18.
+> [!WARNING]
+> Details might vary across firmware versions — this repo was only tested with Note Air 5c files generated with latest firmware as of 2026/02/18.
 
 ### ZIP Structure
 
@@ -217,6 +223,23 @@ Field 12 in the shape protobuf identifies the brush tool. Observed values and th
 - **Filled types** (60, 61): The stroke outline is tessellated into a closed polygon. Segment count is much larger than point count (~5x). No per-segment width — the shape is filled.
 - **Raster types** (22): Each stroke is a separate raster image. See **Charcoal Raster Rendering** below.
 
+### Rendering Pipeline
+
+Each stroke is rendered by:
+1. **Looking up metadata** — the shape protobuf provides pen_type, thickness, color (ARGB), and an optional affine transform matrix
+2. **Applying the transform** — if the stroke was moved/scaled on-device, the 3×3 affine matrix (`{"values":[a,b,tx,c,d,ty,0,0,1]}`) is applied to each point: `x' = a*x + b*y + tx`, `y' = c*x + d*y + ty`
+3. **Unwrapping tilt** — 8-bit tilt values that wrap at 256 are unwrapped with modular arithmetic to produce continuous angles
+4. **Computing width** — per-point width is computed from pressure and pen-type-specific formulas (see Width Formulas below)
+5. **Drawing** — the pen type determines the drawing primitive (line segments, filled polygon, raster texture, or scanline rectangles)
+
+**Compositing:**
+- Most pen types use normal (source-over) blending at full opacity
+- Highlighter (pen_type 15) uses **multiply** blend mode at ~50% opacity
+- All stroked types use **round** line caps and **round** line joins
+- Strokes are rendered bottom-to-top in creation-timestamp order (field 2 in shape protobuf); later strokes occlude earlier ones
+
+**Color:** Stored as ARGB u32 in protobuf field 4. For most pen types, alpha comes from the ARGB value. The highlighter overrides alpha to ~50%.
+
 ### Width Formulas (Pressure-Sensitive Pens)
 
 Fitted by comparing `.note` stroke data against device-exported PDF output. Thickness values in `.note` are already in PDF points — no scaling needed.
@@ -234,6 +257,8 @@ For variable-width pens (5, 21), each segment uses the average pressure of its t
 
 Charcoal strokes are **not** rendered as vector paths. On the device, each charcoal stroke is exported as a raster image: a solid-color RGB layer with a binary alpha mask that creates the "grain" texture.
 
+**Width envelope:** The charcoal stroke's outline follows the same pressure-dependent variable-width model as the fountain pen: `w = thickness × 1.37 × (pressure/4095)^0.59`, rendered as a filled polygon (same `fill_stroke_outline` approach as calligraphy).
+
 **Texture characteristics:**
 - The alpha mask forms a scattered dot pattern along the stroke path — sparse individual pixels with gaps between them
 - Density varies along the stroke, roughly correlating with pressure
@@ -242,7 +267,7 @@ Charcoal strokes are **not** rendered as vector paths. On the device, each charc
 - The exact algorithm mapping (position, tilt, pressure) → pixel mask is unknown, but the texture appears to be a deterministic scattered pattern
 
 **Rendering approach:**
-Charcoal is approximated with procedural stippling: random dots are scattered along the stroke path within the pressure-dependent width envelope using a tiled charcoal-grain canvas pattern. The RNG is seeded per-stroke (from UUID) for deterministic output. This produces a visually similar scattered grain effect without reverse-engineering the exact device algorithm.
+Charcoal is approximated with procedural stippling: a 64×64 tiled grain pattern (solid color with ~30% of pixels erased) is used as a `CanvasPattern` fill inside the stroke's variable-width polygon outline. The pattern's RNG is seeded per-stroke (from UUID hash) for deterministic output. This produces a visually similar scattered grain effect without reverse-engineering the exact device algorithm.
 
 ### Calligraphy Brush Rendering (pen_type=60, 61)
 
@@ -254,11 +279,20 @@ The page size is **1860 x 2480 points** (approximately 25.83 x 34.44 inches at 7
 
 ### Stroke Z-Ordering
 
-Strokes are rendered bottom-to-top in the order they appear in the `.note` file. Later strokes render on top of earlier ones. Most stroke types use normal blending; the highlighter uses multiply blending at ~50% opacity.
+Strokes are rendered bottom-to-top sorted by creation timestamp (shape protobuf field 2). Within a page, the `#points` index order may differ from creation order; the shape metadata's timestamp is the authoritative sort key. Later strokes render on top of earlier ones.
 
 ### Stash (Undo History)
 
 `stash/` contains undo history (~46% of total file size in typical files). Safe to drop entirely — the device does not require it for rendering. The debloater strips this directory on export.
+
+### Decimation (Optimization) Algorithm
+
+The optimizer reduces file size by removing redundant points from strokes using a modified **Ramer-Douglas-Peucker** algorithm that operates in 5 dimensions: spatial (x, y) plus attribute (pressure, tilt_x, tilt_y). The cost of removing a point is the maximum of:
+
+- **Spatial deviation**: perpendicular distance from the point to the line segment connecting its neighbors
+- **Attribute deviation**: maximum interpolation error across pressure and tilt channels (scaled by user-configurable equivalence factors)
+
+Points at sharp turns (>30° angle change, i.e. `cos(angle) < 0.866`) are never removed. First and last points of each stroke are always preserved. A priority queue processes points in ascending cost order, updating neighbor costs after each removal. The threshold parameter controls the quality/size tradeoff.
 
 ### Older Backup Format (different!)
 
@@ -274,7 +308,8 @@ Key differences from the standalone format:
 
 1. **Header u32**: Version number or page count? Only value `1` observed.
 2. **Bounding boxes**: Must they be updated when points change, or does the device recompute? (Currently we do not update them and the device accepts the file.)
-3. **Pen type completeness**: 8 values observed (2, 5, 15, 21, 22, 37, 60, 61). pen_type=37 is a scanline fill tool. Other Boox brush tools (pencil, etc.) likely have additional values.
+3. **Pen type completeness**: 8 values observed (2, 5, 15, 21, 22, 37, 60, 61). The Boox app offers additional brush tools (pencil, etc.) whose pen_type integers have not yet been observed in test files.
 4. **Pen config absence**: Why do some strokes (~12%) lack pen config JSON (field 11)? Possibly firmware version dependent. On some devices/firmware versions this field may contain a simpler `displayScale`-only JSON (with `maxPressure`, `revisedDisplayScale`, `source`).
-5. **Charcoal texture algorithm**: The exact device algorithm mapping (position, tilt, pressure) → pixel mask is unknown. Our stipple approximation is visually similar but not identical. Tilt_x encodes pen azimuth (256 units = full circle, typically 0–25 range); tilt_y encodes elevation (typically 15–33 range).
-6. **Firmware variation**: Format details observed on our device may differ across firmware versions or device models. The [boox-note-parser](https://github.com/hhornbacher/boox-note-parser) project (based on Note Air 4 C, app version 42842) reports some differences in shape protobuf field interpretation — their field 11 contains a simpler `displayScale` JSON and they don't identify fields 4 (color) or 12 (pen_type). These may be firmware-dependent or represent a different interpretation of the same data.
+5. **Charcoal texture algorithm**: The exact device algorithm for (position, tilt, pressure) → pixel mask is unknown. Our procedural stipple approximation is visually similar but not pixel-identical. Tilt_x encodes pen azimuth (256 units = full circle, typically 0–25 range); tilt_y encodes elevation (typically 15–33 range).
+6. **Velocity effects on width**: Velocity is not stored in `.note` point data (only `time_delta` is stored, from which velocity could theoretically be recomputed using inter-point distances). The marker pen's higher RMSE (1.207 vs 0.063 for fountain) may partly reflect unmodeled velocity effects in the width formula.
+7. **Firmware variation**: Format details observed on our device may differ across firmware versions or device models. The [boox-note-parser](https://github.com/hhornbacher/boox-note-parser) project (based on Note Air 4 C, app version 42842) reports some differences in shape protobuf field interpretation — their field 11 contains a simpler `displayScale` JSON and they don't identify fields 4 (color) or 12 (pen_type). These may be firmware-dependent or represent a different interpretation of the same data.
