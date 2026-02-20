@@ -129,6 +129,10 @@
             <button onclick="openModal('modalLicense')" class="text-sm font-semibold text-gray-600 hover:text-black transition hidden sm:block">License & Disclaimer</button>
             <div class="w-px h-6 bg-gray-200 hidden sm:block"></div>
 
+            <button id="headerRefreshBtn" class="hidden px-4 md:px-5 py-2 md:py-2.5 bg-white text-gray-800 border border-gray-200 rounded-lg md:rounded-xl shadow-sm text-xs md:text-sm font-bold cursor-pointer hover:bg-gray-50 transition whitespace-nowrap items-center gap-1.5">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5M4.9 15a8 8 0 0013.7 1.4M19.1 9A8 8 0 005.4 7.6"></path></svg>
+                <span id="refreshBtnText">Refresh</span>
+            </button>
             <label id="headerUploadBtn" class="hidden px-4 md:px-5 py-2 md:py-2.5 bg-black text-white rounded-lg md:rounded-xl shadow-sm text-xs md:text-sm font-bold cursor-pointer hover:bg-gray-800 transition whitespace-nowrap">
                 Load New File
                 <input type="file" id="headerFileInput" accept=".note,*/*" class="hidden">
@@ -384,7 +388,8 @@
             btnDlNote: document.getElementById('btnDlNote'), btnOptPng: document.getElementById('btnOptPng'),
             exportVisualsSection: document.getElementById('exportVisualsSection'), btnReportIssue: document.getElementById('btnReportIssue'),
 
-            btnDrive: document.getElementById('btnDrive'), txtDrive: document.getElementById('txtDrive')
+            btnDrive: document.getElementById('btnDrive'), txtDrive: document.getElementById('txtDrive'),
+            btnRefresh: document.getElementById('headerRefreshBtn'), txtRefresh: document.getElementById('refreshBtnText')
         };
 
         const formatBytes = (bytes) => {
@@ -393,8 +398,43 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + ['B', 'KB', 'MB'][i];
         };
 
+        // --- Persistence Helpers ---
+        const LS_TOKEN = 'boox_oauth_token';
+        const LS_SOURCE = 'boox_file_source';
+        const LS_FOLDER = 'boox_gdrive_folder';
+
+        function saveToken(token, expiresIn) {
+            try { localStorage.setItem(LS_TOKEN, JSON.stringify({ token, expires_at: Date.now() + (expiresIn - 60) * 1000 })); } catch(e) {}
+        }
+        function loadToken() {
+            try {
+                const d = JSON.parse(localStorage.getItem(LS_TOKEN));
+                if (d && d.expires_at > Date.now()) return d.token;
+                localStorage.removeItem(LS_TOKEN);
+            } catch(e) {}
+            return null;
+        }
+        function clearToken() {
+            try { localStorage.removeItem(LS_TOKEN); } catch(e) {}
+        }
+        function saveFileSource(src) {
+            try { localStorage.setItem(LS_SOURCE, JSON.stringify(src)); } catch(e) {}
+        }
+        function loadFileSource() {
+            try { return JSON.parse(localStorage.getItem(LS_SOURCE)); } catch(e) { return null; }
+        }
+        function saveFolder(folderId) {
+            try { localStorage.setItem(LS_FOLDER, folderId); } catch(e) {}
+        }
+        function loadFolder() {
+            try { return localStorage.getItem(LS_FOLDER); } catch(e) { return null; }
+        }
+
+        let fileSource = null; // { type: 'gdrive'|'local'|'demo', id?, name?, size?, file? }
+        let localFileRef = null; // File object reference for local refresh (session-only)
+
         let tokenClient;
-        let oauthToken = null;
+        let oauthToken = loadToken();
 
         if (ui.btnDrive) {
             ui.btnDrive.onclick = (e) => {
@@ -417,6 +457,7 @@
                         callback: (response) => {
                             if (response.error) return alert("Google Drive authentication failed.");
                             oauthToken = response.access_token;
+                            saveToken(oauthToken, response.expires_in || 3600);
                             createPicker();
                         }
                     });
@@ -439,6 +480,11 @@
                 .setMimeTypes('application/zip,application/x-zip-compressed,application/x-zip,application/octet-stream')
                 .setQuery('*.note');
 
+            const lastFolder = loadFolder();
+            if (lastFolder) {
+                try { view.setParent(lastFolder); } catch(e) {}
+            }
+
             const picker = new google.picker.PickerBuilder()
                 .addView(view)
                 .setOAuthToken(oauthToken)
@@ -446,8 +492,29 @@
                 .setAppId(GOOGLE_APP_ID)
                 .setCallback(pickerCallback)
                 .build();
-                
+
             picker.setVisible(true);
+        }
+
+        async function downloadFromDrive(id, name, size) {
+            const res = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, {
+                headers: { 'Authorization': `Bearer ${oauthToken}` }
+            });
+
+            if (res.status === 401) {
+                oauthToken = null;
+                clearToken();
+                throw new Error("Session expired. Please click Google Drive to re-authenticate.");
+            }
+            if (!res.ok) throw new Error("Failed to securely download file from Drive.");
+
+            const ab = await res.arrayBuffer();
+            filename = name.replace('.note', '');
+            originalFileSize = parseInt(size || ab.byteLength);
+            fileSource = { type: 'gdrive', id, name, size: originalFileSize };
+            localFileRef = null;
+            saveFileSource({ type: 'gdrive', id, name, size: originalFileSize });
+            loadBuffer(new Uint8Array(ab));
         }
 
         async function pickerCallback(data) {
@@ -462,24 +529,18 @@
                 ui.btnDrive.disabled = true;
 
                 try {
-                    // ?alt=media requests the raw file binary payload
-                    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, {
-                        headers: { 'Authorization': `Bearer ${oauthToken}` }
-                    });
-                    
-                    if (res.status === 401) {
-                        oauthToken = null;
-                        throw new Error("Session expired. Please click Google Drive to re-authenticate.");
-                    }
-                    if (!res.ok) throw new Error("Failed to securely download file from Drive.");
-                    
-                    // Directly pipelined to local browser memory!
-                    const ab = await res.arrayBuffer();
-                    
-                    filename = name.replace('.note', '');
-                    originalFileSize = parseInt(size || ab.byteLength);
-                    
-                    loadBuffer(new Uint8Array(ab));
+                    await downloadFromDrive(id, name, size);
+
+                    // Store parent folder for next picker open
+                    try {
+                        const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?fields=parents`, {
+                            headers: { 'Authorization': `Bearer ${oauthToken}` }
+                        });
+                        if (metaRes.ok) {
+                            const meta = await metaRes.json();
+                            if (meta.parents && meta.parents[0]) saveFolder(meta.parents[0]);
+                        }
+                    } catch(e) {} // Non-critical, silently ignore
                 } catch (err) {
                     alert(err.message);
                 } finally {
@@ -580,6 +641,18 @@
             
             ui.headerBtn.classList.remove('hidden');
             ui.headerBtn.classList.add('block');
+
+            // Show refresh button if we have a reloadable source
+            if (fileSource) {
+                const canRefresh = fileSource.type === 'gdrive' || fileSource.type === 'demo' || (fileSource.type === 'local' && localFileRef);
+                if (canRefresh) {
+                    ui.btnRefresh.classList.remove('hidden');
+                    ui.btnRefresh.classList.add('flex');
+                } else {
+                    ui.btnRefresh.classList.add('hidden');
+                    ui.btnRefresh.classList.remove('flex');
+                }
+            }
             
             ui.btnDlDirect.disabled = true;
             ui.btnDlDirect.innerText = "Optimizing...";
@@ -606,7 +679,10 @@
             if (!file || !file.name.endsWith('.note')) return alert('Please upload a valid .note file');
             filename = file.name.replace('.note', '');
             originalFileSize = file.size;
-            try { loadBuffer(new Uint8Array(await file.arrayBuffer())); } 
+            fileSource = { type: 'local' };
+            localFileRef = file;
+            saveFileSource({ type: 'local', name: file.name });
+            try { loadBuffer(new Uint8Array(await file.arrayBuffer())); }
             catch (err) { alert("Corrupted .note file format: " + err); }
         };
 
@@ -622,6 +698,9 @@
                 const ab = await res.arrayBuffer();
                 filename = "demo";
                 originalFileSize = ab.byteLength;
+                fileSource = { type: 'demo' };
+                localFileRef = null;
+                saveFileSource({ type: 'demo' });
                 loadBuffer(new Uint8Array(ab));
             } catch (err) {
                 alert("Could not locate demo.note. Please ensure it rests in the same local root directory.");
@@ -637,6 +716,44 @@
         const fileEvt = e => { if(e.target.files[0]) loadFile(e.target.files[0]); e.target.value = ''; };
         ui.fileInp.addEventListener('change', fileEvt);
         ui.fileInpHdr.addEventListener('change', fileEvt);
+
+        // --- Refresh Handler ---
+        ui.btnRefresh.onclick = async () => {
+            // Prefer in-memory source, fall back to persisted source
+            const src = fileSource || loadFileSource();
+            if (!src) return;
+
+            ui.btnRefresh.disabled = true;
+            ui.txtRefresh.innerText = "Refreshing...";
+
+            try {
+                if (src.type === 'gdrive') {
+                    if (!oauthToken) {
+                        ui.txtRefresh.innerText = "Refresh";
+                        ui.btnRefresh.disabled = false;
+                        return alert("Google Drive session expired. Please re-authenticate via Google Drive first.");
+                    }
+                    await downloadFromDrive(src.id, src.name, src.size);
+                } else if (src.type === 'local' && localFileRef) {
+                    await loadFile(localFileRef);
+                } else if (src.type === 'demo') {
+                    await window.loadDemo();
+                }
+            } catch (err) {
+                alert("Refresh failed: " + (err.message || err));
+            } finally {
+                ui.txtRefresh.innerText = "Refresh";
+                ui.btnRefresh.disabled = false;
+            }
+        };
+
+        // Restore fileSource from localStorage on startup (for showing refresh after reload with gdrive/demo)
+        if (!fileSource) {
+            const saved = loadFileSource();
+            if (saved && (saved.type === 'gdrive' || saved.type === 'demo')) {
+                fileSource = saved;
+            }
+        }
 
         // --- Interaction Engine ---
         let tx = 0, ty = 0, scale = 0.25;
