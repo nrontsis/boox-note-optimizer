@@ -445,40 +445,10 @@
             try { return localStorage.getItem(LS_FOLDER); } catch(e) { return null; }
         }
 
-        // --- URL-encoded settings ---
-        const urlParams = new URLSearchParams(window.location.search);
-
-        function syncSettingsToUrl() {
-            const params = new URLSearchParams(window.location.search);
-            const thresh = parseFloat(ui.inThresh.value);
-            const press = parseInt(ui.inPress.value);
-            const tilt = parseInt(ui.inTilt.value);
-            const auto = ui.chkAutoPreview.checked;
-
-            // Only include non-default values to keep URLs clean
-            if (thresh !== 0.5) params.set('thresh', thresh); else params.delete('thresh');
-            if (press !== 100) params.set('press', press); else params.delete('press');
-            if (tilt !== 20) params.set('tilt', tilt); else params.delete('tilt');
-            if (auto) params.set('autopreview', '1'); else params.delete('autopreview');
-
-            const qs = params.toString();
-            history.replaceState(null, '', qs ? '?' + qs : window.location.pathname);
-        }
-
-        // Apply URL params (override defaults and localStorage)
-        if (urlParams.has('thresh')) ui.inThresh.value = parseFloat(urlParams.get('thresh'));
-        if (urlParams.has('press')) ui.inPress.value = parseInt(urlParams.get('press'));
-        if (urlParams.has('tilt')) ui.inTilt.value = parseInt(urlParams.get('tilt'));
-
-        // --- Auto-preview setting ---
-        if (urlParams.has('autopreview')) {
-            ui.chkAutoPreview.checked = urlParams.get('autopreview') === '1';
-        } else {
-            ui.chkAutoPreview.checked = localStorage.getItem(LS_AUTO_PREVIEW) === 'true';
-        }
+        // --- Auto-preview setting (persists via localStorage) ---
+        ui.chkAutoPreview.checked = localStorage.getItem(LS_AUTO_PREVIEW) === 'true';
         ui.chkAutoPreview.addEventListener('change', () => {
             try { localStorage.setItem(LS_AUTO_PREVIEW, ui.chkAutoPreview.checked); } catch(e) {}
-            syncSettingsToUrl();
         });
 
         let fileSource = null; // { type: 'gdrive'|'local'|'demo', id?, name?, size?, file? }
@@ -622,7 +592,7 @@
             labels[i].innerText = `${i===0 ? parseFloat(inp.value).toFixed(2) : inp.value}${units[i]}`;
             
             inp.addEventListener('input', (e) => labels[i].innerText = `${i===0 ? parseFloat(e.target.value).toFixed(2) : e.target.value}${units[i]}`);
-            inp.addEventListener('change', (e) => { syncSettingsToUrl(); if(app) debouncedProcess(); });
+            inp.addEventListener('change', (e) => { if(app) debouncedProcess(); });
         });
 
         await init();
