@@ -877,7 +877,13 @@ impl AppEngine {
             .map(|(k, _)| k.clone()).collect();
         for k in shape_keys { let ts = self.shape_meta[&k].created_ts; render_list.push((ts, RenderItem::Shape(k))); }
 
-        render_list.sort_by_key(|(ts, _)| *ts);
+        render_list.sort_by_key(|(ts, item)| {
+            let is_fill = match item {
+                RenderItem::Stroke(s) => self.shape_meta.get(&s.uuid).map_or(false, |m| m.pen_type == 37),
+                RenderItem::Shape(_) => false,
+            };
+            (if is_fill { 0u8 } else { 1 }, *ts)
+        });
 
         for (_, item) in &render_list {
             match item {
