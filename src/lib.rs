@@ -1686,24 +1686,50 @@ impl AppEngine {
                 Self::fill_stroke_outline(&ctx, &pts, &half_w);
             },
             37 => { // Scanline Fill
+                // Points are pairs: [left_edge, right_edge] per scan row in local space.
+                // We compute strip quads from consecutive rows, then transform corners
+                // so rotated fills render correctly.
+                let raw: Vec<[f32; 2]> = stroke.points.iter().map(|p| [p.x, p.y]).collect();
+                let pairs = raw.len() / 2;
+                if pairs == 0 { ctx.restore(); return; }
+
+                let mat = meta.matrix.unwrap_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+                let xf = |p: [f32; 2]| -> (f64, f64) {
+                    ((mat[0] as f64 * p[0] as f64 + mat[1] as f64 * p[1] as f64 + mat[2] as f64),
+                     (mat[3] as f64 * p[0] as f64 + mat[4] as f64 * p[1] as f64 + mat[5] as f64))
+                };
+
                 ctx.begin_path();
-                let pairs = pts.len() / 2;
                 for i in 0..pairs {
-                    let p0 = pts[i*2]; let p1 = pts[i*2+1];
-                    let y_top = p0[1].min(p1[1]);
-                    let mut y_bot = y_top + 1.0;
-                    if i + 1 < pairs {
-                        y_bot = pts[(i+1)*2][1].min(pts[(i+1)*2+1][1]);
-                        if y_bot <= y_top {
-                            y_bot = y_top;
-                            for j in i+1..pairs {
-                                let cand = pts[j*2][1].min(pts[j*2+1][1]);
-                                if cand > y_top + 0.01 { y_bot = cand; break; }
+                    let l0 = raw[i * 2];
+                    let r0 = raw[i * 2 + 1];
+                    let y_top = l0[1].min(r0[1]);
+                    let y_bot = if i + 1 < pairs {
+                        let nl = raw[(i + 1) * 2];
+                        let nr = raw[(i + 1) * 2 + 1];
+                        let cand = nl[1].min(nr[1]);
+                        if cand > y_top + 0.01 { cand } else {
+                            // Search forward for next distinct row
+                            let mut found = y_top + 1.0;
+                            for j in i + 1..pairs {
+                                let c = raw[j * 2][1].min(raw[j * 2 + 1][1]);
+                                if c > y_top + 0.01 { found = c; break; }
                             }
-                            if y_bot == y_top { y_bot = y_top + 1.0; }
+                            found
                         }
-                    }
-                    ctx.rect(p0[0] as f64, y_top as f64, (p1[0] - p0[0]) as f64, (y_bot - y_top) as f64);
+                    } else { y_top + 1.0 };
+
+                    // Four corners of the strip in local space
+                    let tl = xf([l0[0], y_top]);
+                    let tr = xf([r0[0], y_top]);
+                    let br = xf([r0[0], y_bot]);
+                    let bl = xf([l0[0], y_bot]);
+
+                    ctx.move_to(tl.0, tl.1);
+                    ctx.line_to(tr.0, tr.1);
+                    ctx.line_to(br.0, br.1);
+                    ctx.line_to(bl.0, bl.1);
+                    ctx.close_path();
                 }
                 ctx.fill();
             },
