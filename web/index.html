@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Boox Note Optimizer</title>
+    <title>Optimizer for Boox Notes</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#ffffff">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -129,14 +129,17 @@
             <button onclick="openModal('modalLicense')" class="text-sm font-semibold text-gray-600 hover:text-black transition hidden sm:block">License & Disclaimer</button>
             <div class="w-px h-6 bg-gray-200 hidden sm:block"></div>
 
+            <button id="headerHomeBtn" class="hidden px-2.5 md:px-3 py-2 md:py-2.5 bg-white text-gray-600 border border-gray-200 rounded-lg md:rounded-xl shadow-sm cursor-pointer hover:bg-gray-50 hover:text-black transition" title="Back to start">
+                <svg class="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z"></path></svg>
+            </button>
             <button id="headerRefreshBtn" class="hidden px-4 md:px-5 py-2 md:py-2.5 bg-white text-gray-800 border border-gray-200 rounded-lg md:rounded-xl shadow-sm text-xs md:text-sm font-bold cursor-pointer hover:bg-gray-50 transition whitespace-nowrap items-center gap-1.5">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5M4.9 15a8 8 0 0013.7 1.4M19.1 9A8 8 0 005.4 7.6"></path></svg>
                 <span id="refreshBtnText">Refresh</span>
             </button>
-            <label id="headerUploadBtn" class="hidden px-4 md:px-5 py-2 md:py-2.5 bg-black text-white rounded-lg md:rounded-xl shadow-sm text-xs md:text-sm font-bold cursor-pointer hover:bg-gray-800 transition whitespace-nowrap">
+            <button id="headerUploadBtn" class="hidden px-4 md:px-5 py-2 md:py-2.5 bg-black text-white rounded-lg md:rounded-xl shadow-sm text-xs md:text-sm font-bold cursor-pointer hover:bg-gray-800 transition whitespace-nowrap">
                 Load New File
-                <input type="file" id="headerFileInput" accept=".note,*/*" class="hidden">
-            </label>
+            </button>
+            <input type="file" id="headerFileInput" accept=".note,*/*" class="hidden">
         </div>
     </header>
 
@@ -187,6 +190,13 @@
                                 Tilt Equivalence <span id="valTilt" class="font-mono text-gray-500">20 units</span>
                             </label>
                             <input type="range" id="inTilt" min="1" max="100" step="1" value="20" class="w-full accent-black cursor-pointer">
+                        </div>
+                        <div class="border-t border-gray-100 pt-4">
+                            <label class="flex items-center gap-3 cursor-pointer">
+                                <input type="checkbox" id="chkAutoPreview" class="w-4 h-4 accent-black cursor-pointer rounded">
+                                <span class="text-xs md:text-sm font-bold text-gray-900">Auto-show preview</span>
+                            </label>
+                            <p class="text-[10px] md:text-[11px] text-gray-500 mt-1.5 ml-7">Skip the comparison view and show the optimized preview directly after processing.</p>
                         </div>
                     </div>
                 </details>
@@ -294,7 +304,7 @@
                 <div id="splitContainer" class="flex-1 w-full flex flex-col md:flex-row relative bg-gray-200 overflow-hidden select-none touch-none">
                     <div id="interactionLayer" class="absolute inset-0 z-40 cursor-grab active:cursor-grabbing"></div>
                     
-                    <div class="absolute top-1/2 left-0 right-0 h-0.5 md:w-0.5 md:h-auto md:top-0 md:bottom-0 md:left-1/2 bg-gray-300 z-30 shadow-2xl transform -translate-y-1/2 md:translate-y-0 md:-translate-x-1/2 pointer-events-none"></div>
+                    <div id="splitDivider" class="absolute top-1/2 left-0 right-0 h-0.5 md:w-0.5 md:h-auto md:top-0 md:bottom-0 md:left-1/2 bg-gray-300 z-30 shadow-2xl transform -translate-y-1/2 md:translate-y-0 md:-translate-x-1/2 pointer-events-none"></div>
 
                     <div class="w-full h-1/2 md:w-1/2 md:h-full relative overflow-hidden pointer-events-none" id="paneLeft">
                         <div class="absolute top-2 left-2 md:top-4 md:left-4 z-10 bg-white/90 backdrop-blur px-2 md:px-3 py-1 md:py-1.5 rounded shadow-sm font-bold text-[9px] md:text-xs tracking-wider text-gray-600 border border-gray-200">ORIGINAL</div>
@@ -363,6 +373,7 @@
         let originalFileSize = 0;
         let optimizedBlob = null;
         let previewEnabled = 'false';
+        let comparisonMode = false;
         let pdfW = 1860;
         let pdfH = 2480;
 
@@ -381,13 +392,16 @@
             inTilt: document.getElementById('inTilt'), valTilt: document.getElementById('valTilt'),
             optResults: document.getElementById('optResults'),
             
-            interactionLayer: document.getElementById('interactionLayer'), paneLeft: document.getElementById('paneLeft'), paneRight: document.getElementById('paneRight'),
+            interactionLayer: document.getElementById('interactionLayer'), paneLeft: document.getElementById('paneLeft'), paneRight: document.getElementById('paneRight'), splitDivider: document.getElementById('splitDivider'),
             tracks: document.querySelectorAll('.canvas-track'), cOrig: document.getElementById('cOrig'), cDeb: document.getElementById('cDeb'),
             
             paginator: document.getElementById('paginator'), pageText: document.getElementById('pageText'), btnResetZoom: document.getElementById('btnResetZoom'),
             btnDlNote: document.getElementById('btnDlNote'), btnOptPng: document.getElementById('btnOptPng'),
             exportVisualsSection: document.getElementById('exportVisualsSection'), btnReportIssue: document.getElementById('btnReportIssue'),
 
+            chkAutoPreview: document.getElementById('chkAutoPreview'),
+
+            btnHome: document.getElementById('headerHomeBtn'),
             btnDrive: document.getElementById('btnDrive'), txtDrive: document.getElementById('txtDrive'),
             btnRefresh: document.getElementById('headerRefreshBtn'), txtRefresh: document.getElementById('refreshBtnText')
         };
@@ -402,6 +416,7 @@
         const LS_TOKEN = 'boox_oauth_token';
         const LS_SOURCE = 'boox_file_source';
         const LS_FOLDER = 'boox_gdrive_folder';
+        const LS_AUTO_PREVIEW = 'boox_auto_preview';
 
         function saveToken(token, expiresIn) {
             try { localStorage.setItem(LS_TOKEN, JSON.stringify({ token, expires_at: Date.now() + (expiresIn - 60) * 1000 })); } catch(e) {}
@@ -429,6 +444,42 @@
         function loadFolder() {
             try { return localStorage.getItem(LS_FOLDER); } catch(e) { return null; }
         }
+
+        // --- URL-encoded settings ---
+        const urlParams = new URLSearchParams(window.location.search);
+
+        function syncSettingsToUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const thresh = parseFloat(ui.inThresh.value);
+            const press = parseInt(ui.inPress.value);
+            const tilt = parseInt(ui.inTilt.value);
+            const auto = ui.chkAutoPreview.checked;
+
+            // Only include non-default values to keep URLs clean
+            if (thresh !== 0.5) params.set('thresh', thresh); else params.delete('thresh');
+            if (press !== 100) params.set('press', press); else params.delete('press');
+            if (tilt !== 20) params.set('tilt', tilt); else params.delete('tilt');
+            if (auto) params.set('autopreview', '1'); else params.delete('autopreview');
+
+            const qs = params.toString();
+            history.replaceState(null, '', qs ? '?' + qs : window.location.pathname);
+        }
+
+        // Apply URL params (override defaults and localStorage)
+        if (urlParams.has('thresh')) ui.inThresh.value = parseFloat(urlParams.get('thresh'));
+        if (urlParams.has('press')) ui.inPress.value = parseInt(urlParams.get('press'));
+        if (urlParams.has('tilt')) ui.inTilt.value = parseInt(urlParams.get('tilt'));
+
+        // --- Auto-preview setting ---
+        if (urlParams.has('autopreview')) {
+            ui.chkAutoPreview.checked = urlParams.get('autopreview') === '1';
+        } else {
+            ui.chkAutoPreview.checked = localStorage.getItem(LS_AUTO_PREVIEW) === 'true';
+        }
+        ui.chkAutoPreview.addEventListener('change', () => {
+            try { localStorage.setItem(LS_AUTO_PREVIEW, ui.chkAutoPreview.checked); } catch(e) {}
+            syncSettingsToUrl();
+        });
 
         let fileSource = null; // { type: 'gdrive'|'local'|'demo', id?, name?, size?, file? }
         let localFileRef = null; // File object reference for local refresh (session-only)
@@ -514,7 +565,7 @@
             fileSource = { type: 'gdrive', id, name, size: originalFileSize };
             localFileRef = null;
             saveFileSource({ type: 'gdrive', id, name, size: originalFileSize });
-            loadBuffer(new Uint8Array(ab));
+            await loadBuffer(new Uint8Array(ab));
         }
 
         async function pickerCallback(data) {
@@ -571,7 +622,7 @@
             labels[i].innerText = `${i===0 ? parseFloat(inp.value).toFixed(2) : inp.value}${units[i]}`;
             
             inp.addEventListener('input', (e) => labels[i].innerText = `${i===0 ? parseFloat(e.target.value).toFixed(2) : e.target.value}${units[i]}`);
-            inp.addEventListener('change', (e) => { if(app) debouncedProcess(); });
+            inp.addEventListener('change', (e) => { syncSettingsToUrl(); if(app) debouncedProcess(); });
         });
 
         await init();
@@ -599,8 +650,9 @@
             if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`);
         };
 
-        ui.btnLoadPreview.onclick = () => {
+        function enterPreview(comparison) {
             previewEnabled = true;
+            comparisonMode = comparison;
 
             ui.previewPlaceholder.classList.add('hidden');
             ui.previewPlaceholder.classList.remove('flex');
@@ -612,16 +664,33 @@
             ui.exportVisualsSection.classList.add('flex');
             ui.btnOptPng.disabled = false;
 
+            // Toggle comparison vs optimized-only layout
+            if (comparison) {
+                ui.paneLeft.classList.remove('hidden');
+                ui.splitDivider.classList.remove('hidden');
+                ui.paneRight.className = 'w-full h-1/2 md:w-1/2 md:h-full relative overflow-hidden pointer-events-none';
+                ui.paneRight.querySelector('.absolute.top-2').classList.remove('hidden');
+            } else {
+                ui.paneLeft.classList.add('hidden');
+                ui.splitDivider.classList.add('hidden');
+                ui.paneRight.className = 'w-full h-full relative overflow-hidden pointer-events-none';
+                ui.paneRight.querySelector('.absolute.top-2').classList.add('hidden');
+            }
+
             setTimeout(() => {
                 fitToScreen();
                 renderCanvases();
             }, 10);
-        };
+        }
 
-        const loadBuffer = (uint8arr) => {
+        ui.btnLoadPreview.onclick = () => enterPreview(true);
+
+        const loadBuffer = async (uint8arr) => {
             if(app) { try { app.free(); } catch(e) {} }
             try { app = new AppEngine(uint8arr); }
             catch(err) { alert("Corrupted or unsupported .note file format."); return; }
+
+            try { await app.load_images(); } catch(e) { console.warn("Image loading:", e); }
 
             pdfW = app.get_canvas_width() || 1860;
             pdfH = app.get_canvas_height() || 2480;
@@ -631,7 +700,7 @@
                 c.style.width = `${pdfW}px`; c.style.height = `${pdfH}px`;
             });
 
-            previewEnabled = false; // Always reset to false on load
+            previewEnabled = ui.chkAutoPreview.checked; // Auto-preview skips the placeholder
 
             ui.uploadZone.classList.add('hidden');
             ui.uploadZone.classList.remove('flex');
@@ -641,6 +710,8 @@
             
             ui.headerBtn.classList.remove('hidden');
             ui.headerBtn.classList.add('block');
+            ui.btnHome.classList.remove('hidden');
+            ui.btnHome.classList.add('block');
 
             // Show refresh button if we have a reloadable source
             if (fileSource) {
@@ -658,16 +729,30 @@
             ui.btnDlDirect.innerText = "Optimizing...";
             ui.btnLoadPreview.disabled = true;
 
-            // Always show the warning layout
-            ui.workspaceView.classList.add('hidden');
-            ui.workspaceView.classList.remove('flex');
-            
-            ui.previewPlaceholder.classList.remove('hidden');
-            ui.previewPlaceholder.classList.add('flex');
-            
-            ui.exportVisualsSection.classList.add('hidden');
-            ui.exportVisualsSection.classList.remove('flex');
-            ui.btnOptPng.disabled = true;
+            if (ui.chkAutoPreview.checked) {
+                // Skip the placeholder, go straight to workspace
+                ui.previewPlaceholder.classList.add('hidden');
+                ui.previewPlaceholder.classList.remove('flex');
+                ui.workspaceView.classList.remove('hidden');
+                ui.workspaceView.classList.add('flex');
+                // Set up single-pane layout immediately
+                comparisonMode = false;
+                ui.paneLeft.classList.add('hidden');
+                ui.splitDivider.classList.add('hidden');
+                ui.paneRight.className = 'w-full h-full relative overflow-hidden pointer-events-none';
+                ui.paneRight.querySelector('.absolute.top-2').classList.add('hidden');
+                ui.exportVisualsSection.classList.remove('hidden');
+                ui.exportVisualsSection.classList.add('flex');
+                ui.btnOptPng.disabled = true;
+            } else {
+                ui.workspaceView.classList.add('hidden');
+                ui.workspaceView.classList.remove('flex');
+                ui.previewPlaceholder.classList.remove('hidden');
+                ui.previewPlaceholder.classList.add('flex');
+                ui.exportVisualsSection.classList.add('hidden');
+                ui.exportVisualsSection.classList.remove('flex');
+                ui.btnOptPng.disabled = true;
+            }
 
             page = 0;
             setTimeout(() => {
@@ -682,14 +767,14 @@
             fileSource = { type: 'local' };
             localFileRef = file;
             saveFileSource({ type: 'local', name: file.name });
-            try { loadBuffer(new Uint8Array(await file.arrayBuffer())); }
+            try { await loadBuffer(new Uint8Array(await file.arrayBuffer())); }
             catch (err) { alert("Corrupted .note file format: " + err); }
         };
 
         window.loadDemo = async (e) => {
             if(e) { e.preventDefault(); e.stopPropagation(); }
             const btn = document.getElementById('btnDemo');
-            const ogText = btn.innerText; 
+            const ogText = btn.innerText;
             btn.innerText = "Downloading...";
             btn.setAttribute('disabled', 'true');
             try {
@@ -701,9 +786,10 @@
                 fileSource = { type: 'demo' };
                 localFileRef = null;
                 saveFileSource({ type: 'demo' });
-                loadBuffer(new Uint8Array(ab));
+                await loadBuffer(new Uint8Array(ab));
             } catch (err) {
                 alert("Could not locate demo.note. Please ensure it rests in the same local root directory.");
+            } finally {
                 btn.innerText = ogText;
                 btn.removeAttribute('disabled');
             }
@@ -716,6 +802,39 @@
         const fileEvt = e => { if(e.target.files[0]) loadFile(e.target.files[0]); e.target.value = ''; };
         ui.fileInp.addEventListener('change', fileEvt);
         ui.fileInpHdr.addEventListener('change', fileEvt);
+
+        ui.headerBtn.onclick = () => {
+            const src = fileSource || loadFileSource();
+            if (src && src.type === 'gdrive' && ui.btnDrive) {
+                ui.btnDrive.click();
+            } else {
+                ui.fileInpHdr.click();
+            }
+        };
+
+        ui.btnHome.onclick = () => {
+            if (app) { try { app.free(); } catch(e) {} app = null; }
+            optimizedBlob = null;
+            previewEnabled = false;
+            comparisonMode = false;
+
+            ui.sidebar.classList.add('hidden');
+            ui.sidebar.classList.remove('flex');
+            ui.headerBtn.classList.add('hidden');
+            ui.headerBtn.classList.remove('block');
+            ui.btnHome.classList.add('hidden');
+            ui.btnHome.classList.remove('block');
+            ui.btnRefresh.classList.add('hidden');
+            ui.btnRefresh.classList.remove('flex');
+
+            ui.workspaceView.classList.add('hidden');
+            ui.workspaceView.classList.remove('flex');
+            ui.previewPlaceholder.classList.add('hidden');
+            ui.previewPlaceholder.classList.remove('flex');
+
+            ui.uploadZone.classList.remove('hidden');
+            ui.uploadZone.classList.add('flex');
+        };
 
         // --- Refresh Handler ---
         ui.btnRefresh.onclick = async () => {
@@ -762,7 +881,7 @@
 
         function fitToScreen() {
             if(ui.workspaceView.offsetParent === null) return;
-            const rect = ui.paneLeft.getBoundingClientRect();
+            const rect = (comparisonMode ? ui.paneLeft : ui.paneRight).getBoundingClientRect();
             if(rect.width === 0 || rect.height === 0) return;
             
             const targetW = pdfW; const targetH = pdfH;
@@ -779,12 +898,14 @@
             const rectL = ui.paneLeft.getBoundingClientRect();
             const rectR = ui.paneRight.getBoundingClientRect();
             let mx, my;
-            
-            // Elegantly supports BOTH horizontal and vertical splits 
+
+            // Elegantly supports BOTH horizontal and vertical splits, and single-pane mode
             if (clientX >= rectR.left && clientX <= rectR.right && clientY >= rectR.top && clientY <= rectR.bottom) {
                 mx = clientX - rectR.left; my = clientY - rectR.top;
-            } else {
+            } else if (rectL.width > 0) {
                 mx = clientX - rectL.left; my = clientY - rectL.top;
+            } else {
+                mx = clientX - rectR.left; my = clientY - rectR.top;
             }
             return { mx, my };
         }
@@ -909,6 +1030,8 @@
                         ui.btnOptPng.disabled = false;
                         renderCanvases();
                         fitToScreen();
+                    } else if (ui.chkAutoPreview.checked) {
+                        enterPreview(false);
                     }
                 } catch (e) {
                     ui.optResults.innerHTML = '<span class="text-red-500 font-bold">Error during optimization.</span>';
@@ -919,7 +1042,7 @@
 
         function renderCanvases() {
             if(!app || !previewEnabled) return;
-            app.render_page(ui.cOrig, false, page);
+            if(comparisonMode) app.render_page(ui.cOrig, false, page);
             app.render_page(ui.cDeb, true, page);
         }
 

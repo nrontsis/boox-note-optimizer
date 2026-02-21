@@ -1,0 +1,21 @@
+<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>
+<canvas id="c"></canvas>
+<script type="module">
+import init, { AppEngine } from './pkg/boox_optimizer.js';
+await init();
+window.renderNote = async (b64, pageIdx) => {
+    const binary = atob(b64);
+    const u8 = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) u8[i] = binary.charCodeAt(i);
+    const app = new AppEngine(u8);
+    try { await app.load_images(); } catch(e) { console.warn('load_images:', e); }
+    const c = document.getElementById('c');
+    c.width = app.get_canvas_width() || 1860;
+    c.height = app.get_canvas_height() || 2480;
+    app.render_page(c, false, pageIdx || 0);
+    const url = c.toDataURL('image/png');
+    app.free();
+    return url;
+};
+window.ready = true;
+</script></body></html>

@@ -117,7 +117,10 @@ Each point is 16 bytes, big-endian (`>ffBBHI` in [struct](https://docs.python.or
 | 16    | 2    | string  | pointsDocUUID      | Same as `#points` header/path |
 | 17    | 2    | string  | Line style JSON    | `{"lineStyle":{"phase","type"}}` |
 | 18    | 2    | string  | shapeDocUUID       | Same as shape ZIP path |
+| 20    | 2    | string  | Extra JSON         | Contains `featureCollection` for pen_type=40 geometric shapes. See **Geometric Shapes** section. |
 | 21    | 2    | string  | Unknown            | Observed: `"[]"` |
+| 22    | 2    | string  | Rich text HTML     | HTML-formatted text content for text boxes (pen_type=6, 16). |
+| 25    | 2    | bytes   | Point list         | Binary point data for geometric shapes (see **Point List Format** below) |
 | 26    | 2    | string  | Repo JSON          | Observed: `'{"repo":{}}'` |
 
 **Color encoding (ARGB u32):**
@@ -218,6 +221,7 @@ Field 12 in the shape protobuf identifies the brush tool. Observed values and th
 | 21 | Marker | Stroked line segments, varying width per segment | Pressure-sensitive, similar to pen_type 5. |
 | 22 | Charcoal | Per-stroke raster image | Tilt-sensitive. See **Charcoal Raster Rendering** section below. |
 | 37 | Fill | Scanline fill rectangles | Points are interleaved scanline pairs: even-indexed = left edge, odd-indexed = right edge. Each pair defines one horizontal fill span. Thickness always 1.0. |
+| 40 | Geometric Shapes | GeoJSON-based rendering | Uses field 20 `extra` JSON with `featureCollection`. See **Geometric Shapes (pen_type=40)** section. |
 | 60 | Calligraphy Brush A | Filled polygon (no stroke) | Tilt-sensitive. Closed filled path (~5x more segments than input points). No per-segment widths. |
 | 61 | Calligraphy Brush B | Filled polygon (no stroke) | Tilt-sensitive. Same as 60 but different fill tessellation. |
 
@@ -226,6 +230,8 @@ Field 12 in the shape protobuf identifies the brush tool. Observed values and th
 - **Fill type** (37): Points encode a scanline fill — even/odd interleaved pairs define horizontal spans that tile the filled region.
 - **Filled types** (60, 61): The stroke outline is tessellated into a closed polygon. Segment count is much larger than point count (~5x). No per-segment width — the shape is filled.
 - **Raster types** (22): Each stroke is a separate raster image. See **Charcoal Raster Rendering** below.
+- **Text types** (6, 16): Text boxes with plain text (field 10) and/or HTML rich text (field 22). See **Text Boxes** section.
+- **Geometric shapes** (40): GeoJSON-based vector shapes using field 20. See **Geometric Shapes** section.
 
 ### Rendering Pipeline
 
@@ -277,6 +283,91 @@ Charcoal is approximated with procedural stippling: a 64×64 tiled grain pattern
 
 See **[calligraphy.md](calligraphy.md)** for the detailed chisel-tip model, width formula, smoothing pipeline, and known limitations.
 
+### Templates & Backgrounds
+
+Pages can have templates (ruled lines, grids, dot grids) and background images.
+
+**Templates** are stored at `template/json/<pageUUID>.template_json`. The JSON contains:
+```json
+{
+  "layoutType": "LayoutResVector",
+  "properties": {
+    "resourceAttr": { "resName": "template/<templateName>" },
+    "spacing": 68.0,
+    "shaderRect": { "left": 0, "right": 1860, "top": 0, "bottom": 2480 }
+  }
+}
+```
+The template SVG is fetched from the Boox CDN at `https://static.send2boox.com/device/note/template/{templateName}.svg`. Observed template names: `ic_horizontal_line_24` (ruled lines), `new_scribble_back_ground_grid_point` (dot grid).
+
+**Backgrounds** are stored in the `note_info` protobuf field 13 as a JSON string:
+```json
+{
+  "useDocBKGround": true,
+  "docBKGround": { "type": 1, "resId": "<resourceUUID>" },
+  "pageBKGroundMap": { "<pageUUID>": { "type": 1, "resId": "<resourceUUID>" } }
+}
+```
+Background type `1` = image file. The `resId` references a resource in `resource/pb/`. Per-page overrides are in `pageBKGroundMap`.
+
+### Text Boxes (pen_type=6, 16)
+
+Text boxes are shape entries with pen_type 6 or 16. They may appear in the `#points` index (with 2 points defining the bounding box corners) or only in the shape protobuf.
+
+**Content fields:**
+- Field 10: plain text content
+- Field 22: HTML rich text (e.g. `<p><span style="...">text</span></p>`)
+- Field 9: text style JSON with formatting properties:
+  ```json
+  { "textSize": 32, "textBold": false, "textItalic": false, "alignType": 0, "textSpacing": 1.2 }
+  ```
+  `alignType`: 0=left, 1=center, 2=right.
+
+**Positioning:** From bounding_rect (field 7) or from 2 points in the `#points` data defining opposite corners of the text box.
+
+### Geometric Shapes (pen_type=40)
+
+Geometric shapes drawn with the Boox shape tools (lines, arrows, polygons, ovals, curves, brackets, etc.) use pen_type=40 and store their geometry in protobuf field 20 (`extra`) instead of field 25 (`pointList`).
+
+**Field 20 format:** A JSON string containing a `featureCollection` key whose value is itself a JSON string in GeoJSON-like format:
+```json
+{
+  "featureCollection": "{\"type\":\"FeatureCollection\",\"features\":[...]}"
+}
+```
+
+**Coordinate system:** Coordinates in the geometry are in local space. The matrix (field 8) transforms local → page coordinates: `x' = a*x + b*y + tx`, `y' = c*x + d*y + ty`. The matrix can include Y-flips (negative d), scaling, and rotation.
+
+**Geometry types observed in `.note` files:**
+
+| geometry.type | subType | coords format | Rendering |
+|---|---|---|---|
+| LineString | "" | `[[x0,y0],[x1,y1]]` | Straight line |
+| LineString | WaveLine | `[[x0,y0],[x1,y1]]` | Sine wave between endpoints |
+| DirectionLine | "" | `[[x0,y0],[x1,y1]]` | Line with arrowhead at end |
+| BidirectionalLine | "" | `[[x0,y0],[x1,y1]]` | Line with arrowheads at both ends |
+| MultiLineString | "" | `[[[x0,y0],[x1,y1]], ...]` | Multiple line segments (used for arrow head lines) |
+| Polygon | "" | `[[[start,end], ...]]` | Pairs of segment endpoints forming a closed ring |
+| MultiPoint | Oval | `[[x0,y0],[x1,y1]]` | Bounding box → ellipse |
+| MultiPoint | Curve | `[[start],[control],[end]]` | Quadratic Bezier curve |
+| MultiPoint | Arc | `[[bboxMin],[bboxMax],[angleCtrl]]` | Elliptical arc within bounding box. 3rd point x=0 → upper half, x=180 → lower half |
+| MultiPoint | Bracket | `[[tip],[topEnd],[bottomEnd]]` | Bracket/brace: tip is the apex, topEnd/bottomEnd are the open ends |
+| FeatureCollection | Surface | nested `features[]` | Recurse into sub-features. Used for compound shapes: 3D solids (cube, pyramid, cylinder), shapes with hidden edges |
+
+**Polygon coordinate format:** Unlike standard GeoJSON, polygon coordinates are stored as pairs of `[start_point, end_point]` for each edge segment, not as a simple vertex list. The first point of each pair forms the polygon vertex.
+
+**SubType location:** The geometry subtype (Oval, Arc, Curve, Bracket, WaveLine, Surface) is stored in `feature.properties.subType`, not on the geometry object itself.
+
+**Styling:** Color from field 4, thickness from field 5. Individual features may have a `strokeAttr` object with `lineWidth` and `color` overrides.
+
+**Dashed lines:** Features can specify `lineStyle: {"dashLineIntervals": [8.0, 5.0], "phase": 0.0, "type": 1}` for dashed rendering. Used for hidden edges in 3D shapes.
+
+**WaveLine properties:** WaveLine features include `waveAttr` in `feature.properties`: `{"wavyLength": 24.0, "wavyPeak": 6.0, "wavyOffset": 0.0}` controlling wavelength, amplitude, and phase offset.
+
+### Point List Format (field 25)
+
+Used by geometric shapes with pen_type 0 (ellipse), 1 (rectangle), 7 (line), 8/10–12/17/18/24/26/27 (polygons), 28 (arrow), 31 (polyline). Binary format: 4-byte header followed by 16-byte records (same layout as stroke points: x:f32 BE, y:f32 BE, then 8 bytes of size/pressure/event_time). Only x,y are used for shape geometry.
+
 ### Page Geometry & Coordinate Mapping
 
 The page size is **1860 x 2480 points** (approximately 25.83 x 34.44 inches at 72 DPI). Coordinates in `.note` files map 1:1 to device-exported PDF coordinates — no scaling is needed.
@@ -308,11 +399,50 @@ Key differences from the standalone format:
 - 6 floats per point (x, y, pressure, ?, ?, ?) vs 16-byte packed struct
 - `shapeType = 5` used for pressure-sensitive rendering in the backup renderer
 
+### Rendering Comparison Tool (`compare.py`)
+
+A CLI tool for testing rendering accuracy against gold reference PNGs (device-exported screenshots or PDF rasterizations). Requires [uv](https://docs.astral.sh/uv/) — dependencies are declared inline via PEP 723.
+
+**Subcommands:**
+
+```bash
+# Render a .note file to PNG via headless Chromium
+uv run compare.py render shapes.note [-o rendered.png] [--page 0]
+
+# Compare two existing PNGs (gold vs rendered)
+uv run compare.py diff gold.png rendered.png [--note shapes.note] [--non-overlapping] [-o diff.png]
+
+# Render + compare in one step (most common)
+uv run compare.py check shapes.note shapes.png [--non-overlapping] [-o diff.png] [--page 0]
+```
+
+**How it works:**
+1. Spins up a local HTTP server serving the `web/` directory
+2. Uses Playwright (headless Chromium) to load `headless.html`, which initializes the WASM renderer
+3. Passes the `.note` file as base64 to `window.renderNote()`, captures the canvas as a PNG
+4. Compares rendered vs gold pixel-by-pixel, computing MAE (mean absolute error), max error, and percentage of differing pixels
+5. If a `.note` file is provided, extracts per-shape bounding boxes from the protobuf and reports per-region metrics
+6. Outputs a diff visualization with errors amplified 4× and bounding boxes outlined in green (MAE < 1) or red
+
+**Options:**
+- `--non-overlapping`: Only report metrics for shapes whose bounding boxes don't overlap with any other, avoiding ambiguous attribution of errors
+- `--page N`: Render page N (0-indexed, default 0)
+- `-o FILE`: Output path for the diff image
+
+**Output example:**
+```
+Overall: MAE=1.64  Max=255  Diff pixels: 42,139/4,612,800 (0.91%)
+
+Per bounding box (15 regions):
+  [ 841, 310 → 1174, 615] pen=40  MAE=  7.40  Max=255  diff=5.2%  DIFF
+  [ 100, 200 →  400, 500] pen=40  MAE=  0.45  Max= 12  diff=0.3%  OK
+```
+
 ### Open Questions
 
 1. **Header u32**: Version number or page count? Only value `1` observed.
 2. **Bounding boxes**: Must they be updated when points change, or does the device recompute? (Currently we do not update them and the device accepts the file.)
-3. **Pen type completeness**: 8 values observed (2, 5, 15, 21, 22, 37, 60, 61). The Boox app offers additional brush tools (pencil, etc.) whose pen_type integers have not yet been observed in test files.
+3. **Pen type completeness**: 10 values observed (2, 5, 6, 15, 16, 21, 22, 37, 40, 60, 61). The Boox app offers additional brush tools (pencil, etc.) whose pen_type integers have not yet been observed in test files.
 4. **Pen config absence**: Why do some strokes (~12%) lack pen config JSON (field 11)? Possibly firmware version dependent. On some devices/firmware versions this field may contain a simpler `displayScale`-only JSON (with `maxPressure`, `revisedDisplayScale`, `source`).
 5. **Charcoal texture algorithm**: The exact device algorithm for (position, tilt, pressure) → pixel mask is unknown. Our procedural stipple approximation is visually similar but not pixel-identical. Tilt_x encodes pen azimuth (256 units = full circle, typically 0–25 range); tilt_y encodes elevation (typically 15–33 range).
 6. **Velocity effects on width**: Velocity is not stored in `.note` point data (only `time_delta` is stored, from which velocity could theoretically be recomputed using inter-point distances). The marker pen's higher RMSE (1.207 vs 0.063 for fountain) may partly reflect unmodeled velocity effects in the width formula.
