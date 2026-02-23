@@ -589,11 +589,13 @@
         const units = [' px', ' lvl', ' units'];
 
         inputs.forEach((inp, i) => {
-            labels[i].innerText = `${i===0 ? parseFloat(inp.value).toFixed(2) : inp.value}${units[i]}`;
-            
-            inp.addEventListener('input', (e) => labels[i].innerText = `${i===0 ? parseFloat(e.target.value).toFixed(2) : e.target.value}${units[i]}`);
+            const fmt = (v) => i===0 ? parseFloat(v).toFixed(2) : v;
+            labels[i].innerText = `${fmt(inp.value)}${units[i]}`;
+
+            inp.addEventListener('input', (e) => labels[i].innerText = `${fmt(e.target.value)}${units[i]}`);
             inp.addEventListener('change', (e) => { if(app) debouncedProcess(); });
         });
+
 
         await init();
 

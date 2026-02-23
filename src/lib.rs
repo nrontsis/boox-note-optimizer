@@ -285,13 +285,12 @@ pub fn parse_points(data: &[u8], path: &str) -> Result<Note, String> {
         }
 
         let mut points = Vec::new();
-        let mut cum = 0.0;
         for j in 0..(size - 4) / 16 {
             if offset + 4 + j * 16 + 16 > data.len() {
                 break;
             }
             let mut cur = Cursor::new(&data[offset + 4 + j * 16..]);
-            if let (Ok(x), Ok(y), Ok(tx), Ok(ty), Ok(pr), Ok(dt)) = (
+            if let (Ok(x), Ok(y), Ok(tx), Ok(ty), Ok(pr), Ok(raw_t)) = (
                 cur.read_f32::<BigEndian>(),
                 cur.read_f32::<BigEndian>(),
                 cur.read_u8(),
@@ -299,17 +298,17 @@ pub fn parse_points(data: &[u8], path: &str) -> Result<Note, String> {
                 cur.read_u16::<BigEndian>(),
                 cur.read_u32::<BigEndian>(),
             ) {
-                cum += dt as f64;
                 points.push(Point {
                     x,
                     y,
                     tilt_x: tx,
                     tilt_y: ty,
                     pressure: pr,
-                    cum_time: cum,
+                    cum_time: raw_t as f64,
                 });
             }
         }
+        // Stored values are cumulative timestamps (ms from stroke start)
         if !points.is_empty() {
             strokes.push(Stroke { uuid, points });
         }
@@ -625,17 +624,14 @@ pub fn build_points(nd: &Note) -> Vec<u8> {
     let mut c_off = nd.header.len() as u32;
     for s in &nd.strokes {
         let mut b = vec![0, 0, 0, 0];
-        let mut last = 0;
-        for (i, p) in s.points.iter().enumerate() {
+        for p in &s.points {
             b.write_f32::<BigEndian>(p.x).unwrap();
             b.write_f32::<BigEndian>(p.y).unwrap();
             b.write_u8(p.tilt_x).unwrap();
             b.write_u8(p.tilt_y).unwrap();
             b.write_u16::<BigEndian>(p.pressure).unwrap();
-            let cint = p.cum_time.round() as u32;
-            b.write_u32::<BigEndian>(if i == 0 { cint } else { cint.saturating_sub(last) })
-                .unwrap();
-            last = cint;
+            // Write cumulative timestamp (matching device .note format)
+            b.write_u32::<BigEndian>(p.cum_time.round() as u32).unwrap();
         }
         idxs.push((s.uuid.clone(), c_off, b.len() as u32));
         c_off += b.len() as u32;
@@ -816,7 +812,17 @@ impl AppEngine {
             let u_tx = unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_x as f32).collect::<Vec<_>>());
             let u_ty = unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_y as f32).collect::<Vec<_>>());
             let math_pts: Vec<[f32; 5]> = stroke.points.iter().enumerate().map(|(i, p)| { [p.x, p.y, p.pressure as f32 * p_scale, u_tx[i] * t_scale, u_ty[i] * t_scale] }).collect();
-            let mask = decimate(&math_pts, threshold);
+            let mut mask = decimate(&math_pts, threshold);
+
+            // For nBrush strokes, always keep first 10 and last 10 points
+            // This is to avoid extreme sensitivity of this brush type on device rendering
+            let is_nbrush = self.shape_meta.get(&stroke.uuid).map_or(false, |m| m.pen_type == 21);
+            if is_nbrush {
+                let n = mask.len();
+                for i in 0..10.min(n) { mask[i] = true; }
+                for i in n.saturating_sub(10)..n { mask[i] = true; }
+            }
+
             let opt_pts: Vec<Point> = stroke.points.iter().enumerate().filter(|(i, _)| mask[*i]).map(|(_, p)| p.clone()).collect();
             new_strokes.push(Stroke { uuid: stroke.uuid.clone(), points: opt_pts });
         }
@@ -1643,7 +1649,7 @@ impl AppEngine {
         }).collect();
 
         match meta.pen_type {
-            5 | 21 => { // Fountain & Marker
+            5 | 21 => { // Fountain & nBrush
                 let is_fountain = meta.pen_type == 5;
                 for i in 0..pts.len() - 1 {
                     let w1 = (meta.thickness * if is_fountain { 1.37 * (pts[i][2]/4095.0).powf(0.59) } else { 2.55 * (pts[i][2]/4095.0).powf(0.43) }).max(0.5);

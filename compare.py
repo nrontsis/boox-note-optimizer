@@ -171,6 +171,60 @@ def render_note(note_path, page=0):
     return Image.open(io.BytesIO(png_bytes)).convert("RGBA")
 
 
+def render_all_pages(note_path):
+    """Render all pages of a .note file. Returns list of PIL Images."""
+    from playwright.sync_api import sync_playwright
+
+    with open(note_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+
+    server, port = start_http_server(WEB_DIR)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            pg = browser.new_context().new_page()
+            pg.goto(f"http://127.0.0.1:{port}/headless.html", wait_until="networkidle")
+            pg.wait_for_function("window.ready === true", timeout=15000)
+            data_urls = pg.evaluate(
+                "async (b64) => await window.renderAllPages(b64)", b64
+            )
+            browser.close()
+    finally:
+        server.shutdown()
+
+    images = []
+    for url in data_urls:
+        png_bytes = base64.b64decode(url.split(",", 1)[1])
+        images.append(Image.open(io.BytesIO(png_bytes)).convert("RGBA"))
+    return images
+
+
+def render_debloated(note_path, page=0, threshold=0.5, press_eq=100, tilt_eq=20):
+    """Render a .note file after debloating with given parameters."""
+    from playwright.sync_api import sync_playwright
+
+    with open(note_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+
+    server, port = start_http_server(WEB_DIR)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            pg = browser.new_context().new_page()
+            pg.goto(f"http://127.0.0.1:{port}/headless.html", wait_until="networkidle")
+            pg.wait_for_function("window.ready === true", timeout=15000)
+            data_url = pg.evaluate(
+                "async ([b64, idx, th, pe, te]) => await window.renderDebloated(b64, idx, th, pe, te)",
+                [b64, page, threshold, press_eq, tilt_eq]
+            )
+            browser.close()
+    finally:
+        server.shutdown()
+
+    png_bytes = base64.b64decode(data_url.split(",", 1)[1])
+    return Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+
+
 # ── Image comparison ──
 
 def compare_images(gold_img, rendered_img, entries=None, non_overlapping=False):
@@ -245,11 +299,22 @@ def print_results(results):
 # ── Commands ──
 
 def cmd_render(args):
-    print(f"Rendering {args.note} (page {args.page})...")
-    img = render_note(args.note, page=args.page)
-    out = args.output or Path(args.note).stem + "_rendered.png"
-    img.save(out)
-    print(f"Saved {out} ({img.size[0]}x{img.size[1]})")
+    if args.page == 'all':
+        print(f"Rendering all pages of {args.note}...")
+        images = render_all_pages(args.note)
+        stem = Path(args.note).stem
+        for i, img in enumerate(images):
+            out = f"{stem}_p{i}.png" if not args.output else f"{Path(args.output).stem}_p{i}.png"
+            img.save(out)
+            print(f"  Page {i}: {out} ({img.size[0]}x{img.size[1]})")
+        print(f"Rendered {len(images)} pages")
+    else:
+        page = int(args.page)
+        print(f"Rendering {args.note} (page {page})...")
+        img = render_note(args.note, page=page)
+        out = args.output or Path(args.note).stem + "_rendered.png"
+        img.save(out)
+        print(f"Saved {out} ({img.size[0]}x{img.size[1]})")
 
 
 def cmd_diff(args):
@@ -264,8 +329,9 @@ def cmd_diff(args):
 
 
 def cmd_check(args):
-    print(f"Rendering {args.note} (page {args.page})...")
-    rendered = render_note(args.note, page=args.page)
+    page = int(args.page)
+    print(f"Rendering {args.note} (page {page})...")
+    rendered = render_note(args.note, page=page)
     gold = Image.open(args.gold).convert("RGBA")
     entries = extract_bboxes(args.note)
     print(f"Comparing against {args.gold}...")
@@ -285,7 +351,7 @@ def main():
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("render", help="Render .note → PNG")
-    p.add_argument("note"); p.add_argument("-o", "--output"); p.add_argument("--page", type=int, default=0)
+    p.add_argument("note"); p.add_argument("-o", "--output"); p.add_argument("--page", default="0", help="Page index or 'all'")
 
     p = sub.add_parser("diff", help="Compare two PNGs")
     p.add_argument("gold"); p.add_argument("rendered")

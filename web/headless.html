@@ -17,5 +17,57 @@ window.renderNote = async (b64, pageIdx) => {
     app.free();
     return url;
 };
+window.renderAllPages = async (b64) => {
+    const binary = atob(b64);
+    const u8 = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) u8[i] = binary.charCodeAt(i);
+    const app = new AppEngine(u8);
+    try { await app.load_images(); } catch(e) { console.warn('load_images:', e); }
+    const c = document.getElementById('c');
+    c.width = app.get_canvas_width() || 1860;
+    c.height = app.get_canvas_height() || 2480;
+    const n = app.get_page_count();
+    const urls = [];
+    for (let i = 0; i < n; i++) {
+        app.render_page(c, false, i);
+        urls.push(c.toDataURL('image/png'));
+    }
+    app.free();
+    return urls;
+};
+window.renderDebloated = async (b64, pageIdx, threshold, pressEq, tiltEq) => {
+    const binary = atob(b64);
+    const u8 = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) u8[i] = binary.charCodeAt(i);
+    const app = new AppEngine(u8);
+    try { await app.load_images(); } catch(e) { console.warn('load_images:', e); }
+    app.prepare_debloat();
+    const n = app.get_note_count();
+    for (let i = 0; i < n; i++) {
+        app.debloat_note(i, threshold || 0.5, pressEq || 100, tiltEq || 20);
+    }
+    const c = document.getElementById('c');
+    c.width = app.get_canvas_width() || 1860;
+    c.height = app.get_canvas_height() || 2480;
+    app.render_page(c, true, pageIdx || 0);
+    const url = c.toDataURL('image/png');
+    app.free();
+    return url;
+};
+window.getPointCounts = async (b64, threshold, pressEq, tiltEq) => {
+    const binary = atob(b64);
+    const u8 = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) u8[i] = binary.charCodeAt(i);
+    const app = new AppEngine(u8);
+    const orig = app.get_orig_points();
+    app.prepare_debloat();
+    const n = app.get_note_count();
+    for (let i = 0; i < n; i++) {
+        app.debloat_note(i, threshold || 0.5, pressEq || 100, tiltEq || 20);
+    }
+    const deb = app.get_deb_points();
+    app.free();
+    return {orig, deb};
+};
 window.ready = true;
 </script></body></html>
