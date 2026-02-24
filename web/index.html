@@ -776,6 +776,15 @@
         ui.fileInp.addEventListener('change', fileEvt);
         ui.fileInpHdr.addEventListener('change', fileEvt);
 
+        if ('launchQueue' in window) {
+            window.launchQueue.setConsumer(async (launchParams) => {
+                if (!launchParams.files || !launchParams.files.length) return;
+                const handle = launchParams.files[0];
+                const file = await handle.getFile();
+                loadFile(file);
+            });
+        }
+
         ui.headerBtn.onclick = () => {
             const src = fileSource || loadFileSource();
             if (src && src.type === 'gdrive' && ui.btnDrive) {
