@@ -644,13 +644,29 @@
         async function shareOptimizedFile() {
             if (!optimizedBlob) return;
             const file = new File([optimizedBlob], `${filename}_optimized.note`, { type: 'application/octet-stream' });
+
+            // DEBUG: try multiple share methods to find what works
+            const results = [];
+
+            // Test 1: share with files
             try {
                 await navigator.share({ files: [file] });
+                return; // success
             } catch(e) {
-                if (e.name !== 'AbortError') {
-                    alert('Share failed - try using the download button instead\n Error message: ' + (e.message || e));
-                }
+                if (e.name === 'AbortError') return;
+                results.push('files: ' + e.name + ': ' + e.message);
             }
+
+            // Test 2: share URL only
+            try {
+                await navigator.share({ title: 'test', url: location.href });
+                results.push('url-only: OK');
+            } catch(e) {
+                if (e.name === 'AbortError') return;
+                results.push('url-only: ' + e.name + ': ' + e.message);
+            }
+
+            alert('Share diagnostics:\n' + results.join('\n'));
         }
         ui.btnShareNote.onclick = shareOptimizedFile;
         ui.btnShareDirect.onclick = shareOptimizedFile;
