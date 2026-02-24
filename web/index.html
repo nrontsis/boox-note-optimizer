@@ -644,7 +644,13 @@
         async function shareOptimizedFile() {
             if (!optimizedBlob) return;
             const file = new File([optimizedBlob], `${filename}_optimized.note`, { type: 'application/octet-stream' });
-            try { await navigator.share({ files: [file] }); } catch(e) { if (e.name !== 'AbortError') console.warn('Share failed:', e); }
+            try {
+                await navigator.share({ files: [file] });
+            } catch(e) {
+                if (e.name !== 'AbortError') {
+                    alert('Share failed - try using the download button instead\n Error message: ' + (e.message || e));
+                }
+            }
         }
         ui.btnShareNote.onclick = shareOptimizedFile;
         ui.btnShareDirect.onclick = shareOptimizedFile;
