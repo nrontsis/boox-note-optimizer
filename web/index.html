@@ -806,7 +806,7 @@
             } catch (e) {
                 dbg.push('err=' + e.message);
             }
-            if (dbg.length) document.title = dbg.join(' | ');
+            if (dbg.length) alert('SHARE DEBUG: ' + dbg.join(' | '));
         })();
 
         ui.headerBtn.onclick = () => {
