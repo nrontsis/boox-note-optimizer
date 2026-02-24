@@ -31,7 +31,6 @@
             "application/zip",
             "application/x-zip-compressed",
             "application/x-zip",
-            "*/*",
             ".note"
           ]
         }
