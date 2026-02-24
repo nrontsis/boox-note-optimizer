@@ -2,7 +2,7 @@
   "name": "Optimizer for Boox Notes",
   "short_name": "Note Optimizer",
   "description": "Optimize Boox .note files by removing redundant stroke data",
-  "start_url": "/boox-note-optimizer/",
+  "start_url": "https://nrontsis.github.io/boox-note-optimizer/",
   "display": "standalone",
   "background_color": "#f3f4f6",
   "theme_color": "#ffffff",
@@ -10,16 +10,8 @@
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
   ],
-  "file_handlers": [
-    {
-      "action": "/boox-note-optimizer/",
-      "accept": {
-        "application/octet-stream": [".note"]
-      }
-    }
-  ],
   "share_target": {
-    "action": "/boox-note-optimizer/share",
+    "action": "https://nrontsis.github.io/boox-note-optimizer/share",
     "method": "POST",
     "enctype": "multipart/form-data",
     "params": {

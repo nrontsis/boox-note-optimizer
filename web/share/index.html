@@ -5,7 +5,7 @@
 alert('SHARE FALLBACK: SW did not intercept. URL=' + location.href + ' method=GET(fallback)');
 // Register SW so future shares work, then redirect to app.
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').then(reg => {
+  navigator.serviceWorker.register('../sw.js').then(reg => {
     return reg.active || new Promise(r => {
       const sw = reg.installing || reg.waiting;
       sw.addEventListener('statechange', () => { if (sw.state === 'active') r(sw); });
@@ -14,11 +14,11 @@ if ('serviceWorker' in navigator) {
     alert('SW now active. Please try sharing again.');
   }).catch(e => {
     alert('SW registration failed: ' + e.message);
-    window.location.href = './';
+    window.location.href = '../';
   });
 } else {
   alert('No SW support');
-  window.location.href = './';
+  window.location.href = '../';
 }
 </script>
 </body></html>
