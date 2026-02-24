@@ -980,7 +980,7 @@ impl AppEngine {
                         }
                     }
                 }
-                // For each surviving pair, expand by 2x the difference to the envelope.
+                // For each surviving pair, expand by 3x the difference to the envelope.
                 // Linear interpolation between surviving pairs means each endpoint only
                 // contributes half at the midpoint, so 2x compensates correctly.
                 // Idempotent: re-running on adjusted data produces the same result.
@@ -995,8 +995,8 @@ impl AppEngine {
                     }
                     let cur_left = opt_pts[si * 2].x;
                     let cur_right = opt_pts[si * 2 + 1].x;
-                    opt_pts[si * 2].x = 2.0 * min_left - cur_left;
-                    opt_pts[si * 2 + 1].x = 2.0 * max_right - cur_right;
+                    opt_pts[si * 2].x = 3.0 * min_left - cur_left;
+                    opt_pts[si * 2 + 1].x = 3.0 * max_right - cur_right;
                 }
             }
 
