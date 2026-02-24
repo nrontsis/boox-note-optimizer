@@ -618,6 +618,116 @@ pub fn parse_note_info(data: &[u8], w: &mut f32, h: &mut f32, bg: &mut Option<St
 
 // ── Binary serialization ──
 
+pub fn encode_varint(buf: &mut Vec<u8>, mut v: u64) {
+    loop {
+        if v <= 0x7F { buf.push(v as u8); return; }
+        buf.push((v as u8 & 0x7F) | 0x80);
+        v >>= 7;
+    }
+}
+
+/// Rewrite shape protobuf, applying pen_type and thickness overrides for given UUIDs.
+pub fn patch_shape_protobuf(data: &[u8], overrides: &HashMap<String, (i32, f32)>) -> Vec<u8> {
+    let mut result = Vec::new();
+    let mut off = 0;
+    while off < data.len() {
+        let msg_start = off;
+        let tag = decode_var(data, &mut off);
+        let (fn_num, wt) = ((tag >> 3) as u32, (tag & 0x07) as u8);
+        if fn_num == 1 && wt == 2 {
+            let len = decode_var(data, &mut off) as usize;
+            if off + len > data.len() { break; }
+            let msg = &data[off..off + len];
+            off += len;
+
+            // Extract UUID from the inner message to check if it needs patching
+            let mut so = 0;
+            let mut uuid = String::new();
+            while so < msg.len() {
+                let stag = decode_var(msg, &mut so);
+                let (sfn, swt) = ((stag >> 3) as u32, (stag & 0x07) as u8);
+                if sfn == 1 && swt == 2 {
+                    let l = decode_var(msg, &mut so) as usize;
+                    if so + l <= msg.len() {
+                        uuid = String::from_utf8_lossy(&msg[so..so + l]).to_string();
+                    }
+                    so += l;
+                    break;
+                }
+                match swt {
+                    0 => { decode_var(msg, &mut so); }
+                    1 => so += 8,
+                    2 => { let l = decode_var(msg, &mut so) as usize; so += l; }
+                    5 => so += 4,
+                    _ => break,
+                }
+            }
+
+            if let Some(&(new_pt, new_th)) = overrides.get(&uuid) {
+                // Rebuild inner message with overridden pen_type and thickness
+                let mut inner = Vec::new();
+                let mut so = 0;
+                while so < msg.len() {
+                    let field_start = so;
+                    let stag = decode_var(msg, &mut so);
+                    let (sfn, swt) = ((stag >> 3) as u32, (stag & 0x07) as u8);
+                    match (sfn, swt) {
+                        (5, 5) => {
+                            // thickness — replace with new value
+                            if so + 4 > msg.len() { break; }
+                            encode_varint(&mut inner, (5 << 3) | 5);
+                            inner.extend_from_slice(&new_th.to_le_bytes());
+                            so += 4;
+                        }
+                        (12, 0) => {
+                            // pen_type — replace with new value
+                            let _old = decode_var(msg, &mut so);
+                            encode_varint(&mut inner, (12 << 3) | 0);
+                            encode_varint(&mut inner, new_pt as u64);
+                        }
+                        (_, 0) => {
+                            decode_var(msg, &mut so);
+                            inner.extend_from_slice(&msg[field_start..so]);
+                        }
+                        (_, 1) => {
+                            inner.extend_from_slice(&msg[field_start..so + 8]);
+                            so += 8;
+                        }
+                        (_, 2) => {
+                            let l = decode_var(msg, &mut so) as usize;
+                            inner.extend_from_slice(&msg[field_start..so + l]);
+                            so += l;
+                        }
+                        (_, 5) => {
+                            inner.extend_from_slice(&msg[field_start..so + 4]);
+                            so += 4;
+                        }
+                        _ => break,
+                    }
+                }
+                // Write patched message
+                encode_varint(&mut result, (1 << 3) | 2);
+                encode_varint(&mut result, inner.len() as u64);
+                result.extend_from_slice(&inner);
+            } else {
+                // No override — copy original bytes verbatim
+                result.extend_from_slice(&data[msg_start..off]);
+            }
+        } else {
+            // Non-message field — copy verbatim
+            match wt {
+                0 => { decode_var(data, &mut off); }
+                1 => off += 8,
+                2 => { let l = decode_var(data, &mut off) as usize; off += l; }
+                5 => off += 4,
+                _ => break,
+            }
+            result.extend_from_slice(&data[msg_start..off]);
+        }
+    }
+    result
+}
+
 pub fn build_points(nd: &Note) -> Vec<u8> {
     let mut bs = Vec::new();
     let mut idxs = Vec::new();
@@ -771,6 +881,7 @@ pub struct AppEngine {
     notes: Vec<Note>,
     deb_notes: Vec<Note>,
     shape_meta: HashMap<String, ShapeMeta>,
+    meta_overrides: HashMap<String, (i32, f32)>,  // uuid -> (new_pen_type, new_thickness)
     pages: Vec<String>,
     canvas_w: f32,
     canvas_h: f32,
@@ -788,7 +899,8 @@ impl AppEngine {
         let nf = NoteFile::open(zip_bytes).map_err(|e| JsValue::from_str(&e))?;
         Ok(AppEngine {
             zip_bytes: zip_bytes.to_vec(), deb_notes: nf.notes.clone(), notes: nf.notes,
-            shape_meta: nf.shape_meta, pages: nf.pages, canvas_w: nf.canvas_w, canvas_h: nf.canvas_h,
+            shape_meta: nf.shape_meta, meta_overrides: HashMap::new(),
+            pages: nf.pages, canvas_w: nf.canvas_w, canvas_h: nf.canvas_h,
             resources: nf.resources, images: HashMap::new(), bg_images: HashMap::new(),
             note_background: nf.note_background, templates: nf.templates,
         })
@@ -796,7 +908,7 @@ impl AppEngine {
 
     pub fn get_canvas_width(&self) -> f32 { self.canvas_w }
     pub fn get_canvas_height(&self) -> f32 { self.canvas_h }
-    pub fn prepare_debloat(&mut self) { self.deb_notes = self.notes.clone(); }
+    pub fn prepare_debloat(&mut self) { self.deb_notes = self.notes.clone(); self.meta_overrides.clear(); }
     pub fn get_note_count(&self) -> usize { self.notes.len() }
 
     pub fn debloat_note(&mut self, idx: usize, threshold: f32, press_eq: f32, tilt_eq: f32) {
@@ -812,18 +924,82 @@ impl AppEngine {
             let u_tx = unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_x as f32).collect::<Vec<_>>());
             let u_ty = unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_y as f32).collect::<Vec<_>>());
             let math_pts: Vec<[f32; 5]> = stroke.points.iter().enumerate().map(|(i, p)| { [p.x, p.y, p.pressure as f32 * p_scale, u_tx[i] * t_scale, u_ty[i] * t_scale] }).collect();
-            let mut mask = decimate(&math_pts, threshold);
+            let mask = decimate(&math_pts, threshold);
 
-            // For nBrush strokes, always keep first 10 and last 10 points
-            // This is to avoid extreme sensitivity of this brush type on device rendering
+            // Replace nBrush (pen_type=21) with ballpoint (pen_type=2) for decimation
+            // nBrush is too sensitive to point spacing on the device; ballpoint handles sparse points well
             let is_nbrush = self.shape_meta.get(&stroke.uuid).map_or(false, |m| m.pen_type == 21);
             if is_nbrush {
-                let n = mask.len();
-                for i in 0..10.min(n) { mask[i] = true; }
-                for i in n.saturating_sub(10)..n { mask[i] = true; }
+                let meta = &self.shape_meta[&stroke.uuid];
+                // Compute equivalent ballpoint thickness from nbrush formula at median pressure
+                let median_p: f32 = {
+                    let mut pressures: Vec<f32> = stroke.points.iter().map(|p| p.pressure as f32 / 4095.0).collect();
+                    pressures.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    pressures[pressures.len() / 2]
+                };
+                let nbrush_width = 2.07 * meta.thickness * median_p.powf(0.49) + 1.21;
+                self.meta_overrides.insert(stroke.uuid.clone(), (2, nbrush_width));
             }
 
-            let opt_pts: Vec<Point> = stroke.points.iter().enumerate().filter(|(i, _)| mask[*i]).map(|(_, p)| p.clone()).collect();
+            let mut opt_pts: Vec<Point> = stroke.points.iter().enumerate().filter(|(i, _)| mask[*i]).map(|(_, p)| p.clone()).collect();
+
+            // For fill strokes, expand each surviving edge to the min/max of original
+            // edges in its neighborhood (idempotent: setting to envelope, not adding offset)
+            let is_fill = self.shape_meta.get(&stroke.uuid).map_or(false, |m| m.pen_type == 37);
+            if is_fill && opt_pts.len() >= 2 {
+                let orig = &stroke.points;
+                // Build mapping: which original pair indices survived
+                let mut survived: Vec<usize> = Vec::new();
+                let mut oi = 0;
+                for (mi, keep) in mask.iter().enumerate() {
+                    if *keep {
+                        if oi < opt_pts.len() && mi / 2 != survived.last().copied().unwrap_or(usize::MAX) {
+                            // mi is the original point index; pair index = mi / 2
+                        }
+                    }
+                }
+                // Simpler: for each pair in opt_pts, find the range of original pairs
+                // between the previous and next surviving pairs
+                let orig_pairs = orig.len() / 2;
+                let opt_pairs = opt_pts.len() / 2;
+                // Map surviving pair indices back to original pair indices
+                let mut surv_orig_idx: Vec<usize> = Vec::new();
+                {
+                    let mut oi = 0;
+                    for pi in 0..orig_pairs {
+                        if oi < opt_pairs {
+                            let ol = &orig[pi * 2];
+                            let or_ = &orig[pi * 2 + 1];
+                            let sl = &opt_pts[oi * 2];
+                            let sr = &opt_pts[oi * 2 + 1];
+                            if (ol.x - sl.x).abs() < 0.01 && (ol.y - sl.y).abs() < 0.01
+                                && (or_.x - sr.x).abs() < 0.01 && (or_.y - sr.y).abs() < 0.01 {
+                                surv_orig_idx.push(pi);
+                                oi += 1;
+                            }
+                        }
+                    }
+                }
+                // For each surviving pair, expand by 2x the difference to the envelope.
+                // Linear interpolation between surviving pairs means each endpoint only
+                // contributes half at the midpoint, so 2x compensates correctly.
+                // Idempotent: re-running on adjusted data produces the same result.
+                for si in 0..surv_orig_idx.len() {
+                    let start = if si == 0 { 0 } else { surv_orig_idx[si - 1] + 1 };
+                    let end = if si + 1 < surv_orig_idx.len() { surv_orig_idx[si + 1] } else { orig_pairs };
+                    let mut min_left = opt_pts[si * 2].x;
+                    let mut max_right = opt_pts[si * 2 + 1].x;
+                    for pi in start..end {
+                        min_left = min_left.min(orig[pi * 2].x);
+                        max_right = max_right.max(orig[pi * 2 + 1].x);
+                    }
+                    let cur_left = opt_pts[si * 2].x;
+                    let cur_right = opt_pts[si * 2 + 1].x;
+                    opt_pts[si * 2].x = 2.0 * min_left - cur_left;
+                    opt_pts[si * 2 + 1].x = 2.0 * max_right - cur_right;
+                }
+            }
+
             new_strokes.push(Stroke { uuid: stroke.uuid.clone(), points: opt_pts });
         }
         self.deb_notes[idx] = Note { path: stroke_data.path.clone(), header: stroke_data.header.clone(), strokes: new_strokes };
@@ -916,7 +1092,14 @@ impl AppEngine {
                 },
                 RenderItem::Stroke(stroke) => {
                     if stroke.points.len() < 2 { continue; }
-                    let meta = self.shape_meta.get(&stroke.uuid).cloned().unwrap_or_default();
+                    let mut meta = self.shape_meta.get(&stroke.uuid).cloned().unwrap_or_default();
+                    // Apply pen_type/thickness overrides for debloated strokes
+                    if use_deb {
+                        if let Some(&(new_pt, new_th)) = self.meta_overrides.get(&stroke.uuid) {
+                            meta.pen_type = new_pt;
+                            meta.thickness = new_th;
+                        }
+                    }
 
                     // Text box in #points — render as text, not stroke
                     if meta.pen_type == 16 || meta.pen_type == 6 {
@@ -940,6 +1123,59 @@ impl AppEngine {
                 }
             }
         }
+    }
+
+    pub fn export_stroke_data(&self, page_idx: usize) -> String {
+        if page_idx >= self.pages.len() {
+            return r#"{"canvas_w":0,"canvas_h":0,"strokes":[]}"#.to_string();
+        }
+        let page_id = &self.pages[page_idx];
+        let mut strokes: Vec<&Stroke> = self.notes.iter()
+            .filter(|n| n.path.contains(page_id))
+            .flat_map(|n| &n.strokes)
+            .collect();
+        // Sort by created_ts to match render_page z-order (fills first, then timestamp)
+        strokes.sort_by_key(|s| {
+            let meta = self.shape_meta.get(&s.uuid);
+            let is_fill = meta.map_or(false, |m| m.pen_type == 37);
+            let ts = meta.map_or(0, |m| m.created_ts);
+            (if is_fill { 0u8 } else { 1 }, ts)
+        });
+
+        let mut out_strokes = Vec::new();
+        for stroke in &strokes {
+            if stroke.points.len() < 2 { continue; }
+            let meta = match self.shape_meta.get(&stroke.uuid) {
+                Some(m) => m,
+                None => continue,
+            };
+            // Skip non-stroke types (same logic as render_page)
+            if meta.pen_type == 16 || meta.pen_type == 6 { continue; }
+            if !meta.point_list.is_empty() { continue; }
+            if meta.pen_type == 40 && meta.extra_json.is_some() { continue; }
+
+            let mat = meta.matrix.unwrap_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+            let tilt_x_raw: Vec<f32> = stroke.points.iter().map(|p| p.tilt_x as f32).collect();
+            let tilt_x_unwrapped = unwrap_8bit(&tilt_x_raw);
+
+            let (r, g, b, a) = meta.color_rgba;
+            let mut pts_json = Vec::new();
+            for (i, p) in stroke.points.iter().enumerate() {
+                let x = mat[0] * p.x + mat[1] * p.y + mat[2];
+                let y = mat[3] * p.x + mat[4] * p.y + mat[5];
+                pts_json.push(format!("[{},{},{},{},{}]",
+                    x, y, p.pressure, tilt_x_unwrapped[i], p.tilt_y));
+            }
+            out_strokes.push(format!(
+                r#"{{"pen_type":{},"thickness":{},"color":[{},{},{}],"alpha":{},"points":[{}]}}"#,
+                meta.pen_type, meta.thickness, r, g, b, a,
+                pts_json.join(",")
+            ));
+        }
+        format!(
+            r#"{{"canvas_w":{},"canvas_h":{},"strokes":[{}]}}"#,
+            self.canvas_w, self.canvas_h, out_strokes.join(",")
+        )
     }
 
     fn render_template(ctx: &CanvasRenderingContext2d, img: &HtmlImageElement, w: f64, h: f64) {
@@ -1652,8 +1888,8 @@ impl AppEngine {
             5 | 21 => { // Fountain & nBrush
                 let is_fountain = meta.pen_type == 5;
                 for i in 0..pts.len() - 1 {
-                    let w1 = (meta.thickness * if is_fountain { 1.37 * (pts[i][2]/4095.0).powf(0.59) } else { 2.55 * (pts[i][2]/4095.0).powf(0.43) }).max(0.5);
-                    let w2 = (meta.thickness * if is_fountain { 1.37 * (pts[i+1][2]/4095.0).powf(0.59) } else { 2.55 * (pts[i+1][2]/4095.0).powf(0.43) }).max(0.5);
+                    let w1 = (if is_fountain { meta.thickness * 1.37 * (pts[i][2]/4095.0).powf(0.59) } else { 2.07 * meta.thickness * (pts[i][2]/4095.0).powf(0.49) + 1.21 }).max(0.5);
+                    let w2 = (if is_fountain { meta.thickness * 1.37 * (pts[i+1][2]/4095.0).powf(0.59) } else { 2.07 * meta.thickness * (pts[i+1][2]/4095.0).powf(0.49) + 1.21 }).max(0.5);
                     ctx.begin_path(); ctx.set_line_width(((w1 + w2) / 2.0) as f64);
                     ctx.move_to(pts[i][0] as f64, pts[i][1] as f64); ctx.line_to(pts[i+1][0] as f64, pts[i+1][1] as f64); ctx.stroke();
                 }
@@ -1671,14 +1907,14 @@ impl AppEngine {
                 }
                 let smooth_dir = smooth_angle_ema(&stroke_angle, 0.3);
 
-                let min_frac = if meta.pen_type == 60 { 0.18 } else { 0.35 };
+                let min_frac = if meta.pen_type == 60 { 0.18 } else { 0.211 };
                 let mut raw_widths = vec![0.0; n];
                 for i in 0..n {
-                    let diff = smooth_dir[i] - smooth_nib[i];
+                    let diff = if meta.pen_type == 60 { smooth_dir[i] - smooth_nib[i] } else { smooth_dir[i] - 0.782 };
                     let chisel = if meta.pen_type == 60 { diff.cos().abs() } else { diff.sin().abs() };
-                    let nib_w = meta.thickness * 0.95 * (pts[i][2] / 4095.0).powf(0.5);
+                    let nib_w = if meta.pen_type == 60 { meta.thickness * 0.95 * (pts[i][2] / 4095.0).powf(0.5) } else { 0.85 * meta.thickness + 1.64 };
                     let mut w = nib_w * (min_frac + (1.0 - min_frac) * chisel);
-                    if i < 8 { w *= ((i + 1) as f32 / 8.0).powi(2); }
+                    if i < 3 { w *= 0.67 + 0.33 * (i as f32 / 2.0); }
                     raw_widths[i] = w.max(0.5);
                 }
 
@@ -1713,8 +1949,8 @@ impl AppEngine {
 
                 ctx.begin_path();
                 for i in 0..pairs {
-                    let l0 = raw[i * 2];
-                    let r0 = raw[i * 2 + 1];
+                    let l0 = [raw[i * 2][0] - 2.0, raw[i * 2][1]];
+                    let r0 = [raw[i * 2 + 1][0] + 2.0, raw[i * 2 + 1][1]];
                     let y_top = l0[1].min(r0[1]);
                     let y_bot = if i + 1 < pairs {
                         let nl = raw[(i + 1) * 2];
@@ -1730,6 +1966,7 @@ impl AppEngine {
                             found
                         }
                     } else { y_top + 1.0 };
+                    let y_bot = y_bot + 1.5; // overlap to prevent gaps after transform
 
                     // Four corners of the strip in local space
                     let tl = xf([l0[0], y_top]);
@@ -1769,6 +2006,32 @@ impl AppEngine {
                 if name.contains("/stash/") { continue; }
                 if wr.start_file(&name, opt).is_err() { continue; }
                 if let Some(d) = r_map.get(&name) { wr.write_all(d).unwrap(); }
+                else if !self.meta_overrides.is_empty() && name.ends_with(".zip") && name.contains("shape") {
+                    // Rewrite shape protobuf with pen_type/thickness overrides
+                    let mut z_data = Vec::new();
+                    if f.read_to_end(&mut z_data).is_ok() {
+                        if let Ok(mut inner_arc) = ZipArchive::new(Cursor::new(&z_data)) {
+                            let mut inner_buf = Vec::new();
+                            {
+                                let mut inner_wr = ZipWriter::new(Cursor::new(&mut inner_buf));
+                                for j in 0..inner_arc.len() {
+                                    let Ok(mut sf) = inner_arc.by_index(j) else { continue; };
+                                    let inner_name = sf.name().to_string();
+                                    let _ = inner_wr.start_file(&inner_name, opt);
+                                    let mut sh_data = Vec::new();
+                                    if sf.read_to_end(&mut sh_data).is_ok() {
+                                        let patched = patch_shape_protobuf(&sh_data, &self.meta_overrides);
+                                        inner_wr.write_all(&patched).unwrap();
+                                    }
+                                }
+                                inner_wr.finish().unwrap();
+                            }
+                            wr.write_all(&inner_buf).unwrap();
+                        } else {
+                            wr.write_all(&z_data).unwrap();
+                        }
+                    }
+                }
                 else { let mut b = Vec::new(); if f.read_to_end(&mut b).is_ok() { wr.write_all(&b).unwrap(); } }
             }
             if wr.finish().is_err() { return Err(JsValue::from_str("ZIP finish err")); }
@@ -1960,28 +2223,23 @@ impl AppEngine {
         }
 
         ctx.begin_path();
-
         // Forward pass (Right Edge)
         for i in 0..n {
             let (nx, ny) = (normals[i][0] * hw[i], normals[i][1] * hw[i]);
             if i == 0 { ctx.move_to((pts[i][0] + nx) as f64, (pts[i][1] + ny) as f64); }
             else { ctx.line_to((pts[i][0] + nx) as f64, (pts[i][1] + ny) as f64); }
         }
-
-        // End Cap (Anticlockwise ensures a forward bulge bridging the sides)
+        // End cap
         let a_end = (normals[n-1][1] as f64).atan2(normals[n-1][0] as f64);
         ctx.arc_with_anticlockwise(pts[n-1][0] as f64, pts[n-1][1] as f64, hw[n-1] as f64, a_end, a_end - std::f64::consts::PI, true).unwrap();
-
         // Backward pass (Left Edge)
         for i in (0..n).rev() {
             let (nx, ny) = (normals[i][0] * hw[i], normals[i][1] * hw[i]);
             ctx.line_to((pts[i][0] - nx) as f64, (pts[i][1] - ny) as f64);
         }
-
-        // Start Cap (Anticlockwise ensures a backward bulge bridging the sides)
+        // Start cap
         let a_start = (normals[0][1] as f64).atan2(normals[0][0] as f64);
         ctx.arc_with_anticlockwise(pts[0][0] as f64, pts[0][1] as f64, hw[0] as f64, a_start - std::f64::consts::PI, a_start - 2.0 * std::f64::consts::PI, true).unwrap();
-
         ctx.close_path();
         ctx.fill();
     }

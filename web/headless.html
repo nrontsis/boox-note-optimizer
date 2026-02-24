@@ -69,5 +69,14 @@ window.getPointCounts = async (b64, threshold, pressEq, tiltEq) => {
     app.free();
     return {orig, deb};
 };
+window.getStrokeData = (b64, pageIdx) => {
+    const binary = atob(b64);
+    const u8 = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) u8[i] = binary.charCodeAt(i);
+    const app = new AppEngine(u8);
+    const json = app.export_stroke_data(pageIdx || 0);
+    app.free();
+    return json;
+};
 window.ready = true;
 </script></body></html>

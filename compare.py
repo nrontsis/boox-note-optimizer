@@ -1,12 +1,3 @@
-#!/usr/bin/env -S uv run
-# /// script
-# requires-python = ">=3.10"
-# dependencies = [
-#     "playwright",
-#     "pillow",
-#     "numpy",
-# ]
-# ///
 """Compare .note rendering against gold reference PNGs.
 
 Usage:
@@ -23,6 +14,7 @@ import subprocess
 import sys
 import threading
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -117,9 +109,9 @@ def find_non_overlapping(entries):
             if not any(overlaps(e["bbox"], f["bbox"]) for j, f in enumerate(entries) if i != j)]
 
 
-# ── Headless rendering via Playwright ──
+# ── Headless WASM engine via Playwright ──
 
-def start_http_server(directory):
+def _start_http_server(directory):
     import mimetypes
     mimetypes.add_type("application/wasm", ".wasm")
 
@@ -146,83 +138,69 @@ def ensure_playwright_browsers():
                        check=True, capture_output=True)
 
 
-def render_note(note_path, page=0):
-    """Render a .note file to a PIL Image using headless Chromium."""
+@contextmanager
+def headless_page():
+    """Context manager yielding a Playwright page with the WASM engine loaded."""
     from playwright.sync_api import sync_playwright
 
-    with open(note_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-
-    server, port = start_http_server(WEB_DIR)
+    server, port = _start_http_server(WEB_DIR)
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            pg = browser.new_context().new_page()
-            pg.goto(f"http://127.0.0.1:{port}/headless.html", wait_until="networkidle")
-            pg.wait_for_function("window.ready === true", timeout=15000)
-            data_url = pg.evaluate(
-                "async ([b64, idx]) => await window.renderNote(b64, idx)", [b64, page]
-            )
+            page = browser.new_context().new_page()
+            page.goto(f"http://127.0.0.1:{port}/headless.html", wait_until="networkidle")
+            page.wait_for_function("window.ready === true", timeout=15000)
+            yield page
             browser.close()
     finally:
         server.shutdown()
 
+
+def _note_b64(note_path):
+    with open(note_path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+
+def _data_url_to_image(data_url):
     png_bytes = base64.b64decode(data_url.split(",", 1)[1])
     return Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+
+
+def render_note(note_path, page=0):
+    """Render a .note file to a PIL Image using headless Chromium."""
+    b64 = _note_b64(note_path)
+    with headless_page() as pg:
+        data_url = pg.evaluate(
+            "async ([b64, idx]) => await window.renderNote(b64, idx)", [b64, page])
+    return _data_url_to_image(data_url)
 
 
 def render_all_pages(note_path):
     """Render all pages of a .note file. Returns list of PIL Images."""
-    from playwright.sync_api import sync_playwright
-
-    with open(note_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-
-    server, port = start_http_server(WEB_DIR)
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            pg = browser.new_context().new_page()
-            pg.goto(f"http://127.0.0.1:{port}/headless.html", wait_until="networkidle")
-            pg.wait_for_function("window.ready === true", timeout=15000)
-            data_urls = pg.evaluate(
-                "async (b64) => await window.renderAllPages(b64)", b64
-            )
-            browser.close()
-    finally:
-        server.shutdown()
-
-    images = []
-    for url in data_urls:
-        png_bytes = base64.b64decode(url.split(",", 1)[1])
-        images.append(Image.open(io.BytesIO(png_bytes)).convert("RGBA"))
-    return images
+    b64 = _note_b64(note_path)
+    with headless_page() as pg:
+        data_urls = pg.evaluate(
+            "async (b64) => await window.renderAllPages(b64)", b64)
+    return [_data_url_to_image(url) for url in data_urls]
 
 
 def render_debloated(note_path, page=0, threshold=0.5, press_eq=100, tilt_eq=20):
     """Render a .note file after debloating with given parameters."""
-    from playwright.sync_api import sync_playwright
+    b64 = _note_b64(note_path)
+    with headless_page() as pg:
+        data_url = pg.evaluate(
+            "async ([b64, idx, th, pe, te]) => await window.renderDebloated(b64, idx, th, pe, te)",
+            [b64, page, threshold, press_eq, tilt_eq])
+    return _data_url_to_image(data_url)
 
-    with open(note_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
 
-    server, port = start_http_server(WEB_DIR)
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            pg = browser.new_context().new_page()
-            pg.goto(f"http://127.0.0.1:{port}/headless.html", wait_until="networkidle")
-            pg.wait_for_function("window.ready === true", timeout=15000)
-            data_url = pg.evaluate(
-                "async ([b64, idx, th, pe, te]) => await window.renderDebloated(b64, idx, th, pe, te)",
-                [b64, page, threshold, press_eq, tilt_eq]
-            )
-            browser.close()
-    finally:
-        server.shutdown()
-
-    png_bytes = base64.b64decode(data_url.split(",", 1)[1])
-    return Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+def get_stroke_data(note_path, page=0):
+    """Extract stroke data from a .note file via WASM. Returns parsed dict."""
+    b64 = _note_b64(note_path)
+    with headless_page() as pg:
+        json_str = pg.evaluate(
+            "([b64, idx]) => window.getStrokeData(b64, idx)", [b64, page])
+    return json.loads(json_str)
 
 
 # ── Image comparison ──
