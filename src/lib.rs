@@ -972,7 +972,12 @@ impl AppEngine {
             let u_tx = unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_x as f32).collect::<Vec<_>>());
             let u_ty = unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_y as f32).collect::<Vec<_>>());
             let math_pts: Vec<[f32; 5]> = stroke.points.iter().enumerate().map(|(i, p)| { [p.x, p.y, p.pressure as f32 * p_scale, u_tx[i] * t_scale, u_ty[i] * t_scale] }).collect();
-            let mask = decimate(&math_pts, threshold);
+            let mut mask = decimate(&math_pts, threshold);
+
+            // Pin first/last K points to preserve stroke start/end fidelity
+            let pin = 5.min(math_pts.len() / 2);
+            for i in 0..pin { mask[i] = true; }
+            for i in math_pts.len().saturating_sub(pin)..math_pts.len() { mask[i] = true; }
 
             // Replace nBrush (pen_type=21) with ballpoint (pen_type=2) for decimation
             // nBrush is too sensitive to point spacing on the device; ballpoint handles sparse points well
