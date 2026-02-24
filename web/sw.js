@@ -1,4 +1,4 @@
-const CACHE_NAME = 'boox-optimizer-v27';
+const CACHE_NAME = 'boox-optimizer-v28';
 
 const APP_SHELL = [
   './',
@@ -33,23 +33,19 @@ self.addEventListener('fetch', (event) => {
   const sharePath = url.pathname.replace(/\/$/, '');
   if (sharePath.endsWith('/share') && event.request.method === 'POST') {
     event.respondWith((async () => {
-      const dbg = ['SW:share'];
       try {
         const formData = await event.request.formData();
         const file = formData.get('file');
-        dbg.push('file=' + (file ? file.name + '(' + file.size + ')' : 'null'));
         if (file) {
           const cache = await caches.open('share-target');
           await cache.put('/shared-file', new Response(file, {
             headers: { 'X-Filename': file.name, 'Content-Type': 'application/octet-stream' }
           }));
-          dbg.push('cached');
         }
       } catch (e) {
-        dbg.push('err=' + e.message);
+        console.error('Share target stash failed:', e);
       }
-      // Pass debug info via fragment so it survives the redirect
-      return Response.redirect('./#' + encodeURIComponent(dbg.join('|')), 303);
+      return Response.redirect('./', 303);
     })());
     return;
   }

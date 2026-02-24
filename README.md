@@ -6,7 +6,7 @@ This web app is a PWA with offline support. A service worker (`web/sw.js`) cache
 > [!IMPORTANT]
 > Bump the `CACHE_NAME` version in `sw.js` when deploying changes to force clients to re-fetch.
 
-An Android APK can be built from the PWA using [PWABuilder](https://www.pwabuilder.com/), which enables the "Share with" functionality on Boox tablets.
+An Android APK can be built from the PWA using [PWABuilder](https://www.pwabuilder.com/), which enables the "Share with" functionality on Boox tablets. For the TWA to run in full trusted mode (no URL bar, share target support), a [Digital Asset Links](https://developers.google.com/digital-asset-links) file must be served at `https://<domain>/.well-known/assetlinks.json` with the APK's signing key fingerprint.
 
 ## Overview of the document
 
