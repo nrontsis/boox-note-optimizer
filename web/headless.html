@@ -44,7 +44,7 @@ window.renderDebloated = async (b64, pageIdx, threshold, pressEq, tiltEq) => {
     app.prepare_debloat();
     const n = app.get_note_count();
     for (let i = 0; i < n; i++) {
-        app.debloat_note(i, threshold || 0.5, pressEq || 100, tiltEq || 20);
+        app.debloat_note(i, threshold || 0.3, pressEq || 100, tiltEq || 20);
     }
     const c = document.getElementById('c');
     c.width = app.get_canvas_width() || 1860;
@@ -63,7 +63,7 @@ window.getPointCounts = async (b64, threshold, pressEq, tiltEq) => {
     app.prepare_debloat();
     const n = app.get_note_count();
     for (let i = 0; i < n; i++) {
-        app.debloat_note(i, threshold || 0.5, pressEq || 100, tiltEq || 20);
+        app.debloat_note(i, threshold || 0.3, pressEq || 100, tiltEq || 20);
     }
     const deb = app.get_deb_points();
     app.free();
