@@ -786,21 +786,19 @@
         }
 
         // Web Share Target: pick up file stashed by service worker
-        if (new URLSearchParams(window.location.search).has('shared')) {
-            (async () => {
-                try {
-                    const cache = await caches.open('share-target');
-                    const resp = await cache.match('/shared-file');
-                    if (resp) {
-                        const blob = await resp.blob();
-                        const name = resp.headers.get('X-Filename') || 'shared.note';
-                        loadFile(new File([blob], name));
-                        await cache.delete('/shared-file');
-                    }
-                } catch (e) { console.error('Share target pickup failed:', e); }
-                history.replaceState(null, '', './');
-            })();
-        }
+        // Always check (TWA redirects may lose query params)
+        (async () => {
+            try {
+                const cache = await caches.open('share-target');
+                const resp = await cache.match('/shared-file');
+                if (resp) {
+                    const blob = await resp.blob();
+                    const name = resp.headers.get('X-Filename') || 'shared.note';
+                    loadFile(new File([blob], name));
+                    await cache.delete('/shared-file');
+                }
+            } catch (e) { console.error('Share target pickup failed:', e); }
+        })();
 
         ui.headerBtn.onclick = () => {
             const src = fileSource || loadFileSource();

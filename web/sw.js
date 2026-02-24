@@ -1,4 +1,4 @@
-const CACHE_NAME = 'boox-optimizer-v21';
+const CACHE_NAME = 'boox-optimizer-v22';
 
 const APP_SHELL = [
   './',
@@ -40,7 +40,7 @@ self.addEventListener('fetch', (event) => {
           headers: { 'X-Filename': file.name, 'Content-Type': 'application/octet-stream' }
         }));
       }
-      return Response.redirect('./?shared=1', 303);
+      return Response.redirect('./', 303);
     })());
     return;
   }

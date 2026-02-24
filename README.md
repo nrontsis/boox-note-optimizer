@@ -6,6 +6,8 @@ This web app is a PWA with offline support. A service worker (`web/sw.js`) cache
 > [!IMPORTANT]
 > Bump the `CACHE_NAME` version in `sw.js` when deploying changes to force clients to re-fetch.
 
+An Android APK can be built from the PWA using [PWABuilder](https://www.pwabuilder.com/), which enables the "Share with" functionality on Boox tablets.
+
 ## Overview of the document
 
 A `.note` file is a ZIP archive produced by Boox/Onyx e-ink tablets. It stores handwritten strokes as sequences of pressure/tilt-sensitive points, plus per-stroke metadata (pen type, color, thickness, transform) in protobuf. The rendering model is pen-type-dependent: some pens produce constant-width line segments, others produce pressure-modulated variable-width strokes, filled polygons, raster textures, or scanline fills.
