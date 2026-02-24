@@ -149,8 +149,11 @@
         <div id="sidebar" class="hidden w-full md:w-[340px] shrink-0 bg-white border border-gray-200 rounded-xl md:rounded-2xl flex-col shadow-sm z-30 md:overflow-y-auto h-auto md:h-full custom-scrollbar">
             
             <div class="p-4 md:p-5 border-b border-gray-100 flex flex-col gap-4 md:gap-5 shrink-0">
-                <button id="btnDlNote" class="w-full py-3 md:py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm md:text-[15px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed tracking-wide">
-                    Download Optimized .note
+                <button id="btnShareNote" class="w-full py-3 md:py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm md:text-[15px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed tracking-wide">
+                    Share Optimized .note
+                </button>
+                <button id="btnDlNote" class="w-full py-2 text-sm text-gray-500 hover:text-gray-800 font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed">
+                    Download file instead
                 </button>
                 
                 <div id="exportVisualsSection" class="hidden flex-col gap-2">
@@ -278,8 +281,11 @@
                     </div>
                     
                     <div class="flex flex-col w-full gap-3">
-                        <button id="btnDlDirect" class="w-full py-3.5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition shadow-sm text-sm">
-                            Download Optimized .note
+                        <button id="btnShareDirect" class="w-full py-3.5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition shadow-sm text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                            Share Optimized .note
+                        </button>
+                        <button id="btnDlDirect" class="w-full py-2 text-sm text-gray-500 hover:text-gray-800 font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed">
+                            Download file instead
                         </button>
                         <button id="btnLoadPreview" class="w-full py-3 bg-white border border-gray-200 text-gray-800 font-bold rounded-xl hover:bg-gray-50 transition shadow-sm text-sm">
                             Load Visual Comparison
@@ -386,6 +392,7 @@
             workspaceView: document.getElementById('workspaceView'), previewPlaceholder: document.getElementById('previewPlaceholder'), 
             
             btnLoadPreview: document.getElementById('btnLoadPreview'),
+            btnShareDirect: document.getElementById('btnShareDirect'),
             btnDlDirect: document.getElementById('btnDlDirect'),
             
             inThresh: document.getElementById('inThresh'), valThresh: document.getElementById('valThresh'),
@@ -397,7 +404,7 @@
             tracks: document.querySelectorAll('.canvas-track'), cOrig: document.getElementById('cOrig'), cDeb: document.getElementById('cDeb'),
             
             paginator: document.getElementById('paginator'), pageText: document.getElementById('pageText'), btnResetZoom: document.getElementById('btnResetZoom'),
-            btnDlNote: document.getElementById('btnDlNote'), btnOptPdf: document.getElementById('btnOptPdf'),
+            btnShareNote: document.getElementById('btnShareNote'), btnDlNote: document.getElementById('btnDlNote'), btnOptPdf: document.getElementById('btnOptPdf'),
             exportVisualsSection: document.getElementById('exportVisualsSection'), btnReportIssue: document.getElementById('btnReportIssue'),
 
             chkAutoPreview: document.getElementById('chkAutoPreview'),
@@ -406,6 +413,17 @@
             btnDrive: document.getElementById('btnDrive'), txtDrive: document.getElementById('txtDrive'),
             btnRefresh: document.getElementById('headerRefreshBtn'), txtRefresh: document.getElementById('refreshBtnText')
         };
+
+        // --- Web Share API detection ---
+        const canShare = /Android/i.test(navigator.userAgent) && navigator.canShare && navigator.canShare({ files: [new File([''], 'test.note', { type: 'application/octet-stream' })] });
+        if (!canShare) {
+            // Hide share buttons, make download buttons full-width primary style
+            [ui.btnShareNote, ui.btnShareDirect].forEach(b => { b.classList.add('hidden'); });
+            ui.btnDlNote.className = 'w-full py-3 md:py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm md:text-[15px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed tracking-wide';
+            ui.btnDlNote.innerText = 'Download Optimized .note';
+            ui.btnDlDirect.className = 'w-full py-3.5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition shadow-sm text-sm disabled:opacity-50 disabled:cursor-not-allowed';
+            ui.btnDlDirect.innerText = 'Download Optimized .note';
+        }
 
         const formatBytes = (bytes) => {
             if (bytes === 0) return '0 B';
@@ -623,6 +641,14 @@
             if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`);
         };
 
+        async function shareOptimizedFile() {
+            if (!optimizedBlob) return;
+            const file = new File([optimizedBlob], `${filename}_optimized.note`, { type: 'application/octet-stream' });
+            try { await navigator.share({ files: [file] }); } catch(e) { if (e.name !== 'AbortError') console.warn('Share failed:', e); }
+        }
+        ui.btnShareNote.onclick = shareOptimizedFile;
+        ui.btnShareDirect.onclick = shareOptimizedFile;
+
         function enterPreview(comparison) {
             previewEnabled = true;
             comparisonMode = comparison;
@@ -698,8 +724,10 @@
                 }
             }
             
+            ui.btnShareDirect.disabled = true;
             ui.btnDlDirect.disabled = true;
-            ui.btnDlDirect.innerText = "Optimizing...";
+            if (canShare) ui.btnShareDirect.innerText = "Optimizing...";
+            else ui.btnDlDirect.innerText = "Optimizing...";
             ui.btnLoadPreview.disabled = true;
 
             if (ui.chkAutoPreview.checked) {
@@ -966,9 +994,14 @@
         async function debouncedProcess() {
             clearTimeout(debounceTimer);
 
-            [ui.btnDlNote, ui.btnOptPdf, ui.btnLoadPreview, ui.btnDlDirect].forEach(b => { if(b) b.disabled = true; });
-            ui.btnDlNote.innerText = "Optimizing...";
-            if (ui.btnDlDirect) ui.btnDlDirect.innerText = "Optimizing...";
+            [ui.btnShareNote, ui.btnDlNote, ui.btnOptPdf, ui.btnLoadPreview, ui.btnShareDirect, ui.btnDlDirect].forEach(b => { if(b) b.disabled = true; });
+            if (canShare) {
+                ui.btnShareNote.innerText = "Optimizing...";
+                if (ui.btnShareDirect) ui.btnShareDirect.innerText = "Optimizing...";
+            } else {
+                ui.btnDlNote.innerText = "Optimizing...";
+                if (ui.btnDlDirect) ui.btnDlDirect.innerText = "Optimizing...";
+            }
             ui.optResults.innerHTML = '<span class="animate-pulse text-blue-600 font-semibold">Processing...</span>';
 
             debounceTimer = setTimeout(async () => {
@@ -1010,8 +1043,14 @@
                         </div>
                     `;
 
-                    ui.btnDlNote.disabled = false; ui.btnDlNote.innerText = "Download Optimized .note";
-                    ui.btnDlDirect.disabled = false; ui.btnDlDirect.innerText = "Download Optimized .note";
+                    [ui.btnShareNote, ui.btnDlNote, ui.btnShareDirect, ui.btnDlDirect].forEach(b => b.disabled = false);
+                    if (canShare) {
+                        ui.btnShareNote.innerText = "Share Optimized .note";
+                        ui.btnShareDirect.innerText = "Share Optimized .note";
+                    } else {
+                        ui.btnDlNote.innerText = "Download Optimized .note";
+                        ui.btnDlDirect.innerText = "Download Optimized .note";
+                    }
                     ui.btnLoadPreview.disabled = false;
 
                     if (previewEnabled) {
@@ -1023,7 +1062,8 @@
                     }
                 } catch (e) {
                     ui.optResults.innerHTML = '<span class="text-red-500 font-bold">Error during optimization.</span>';
-                    ui.btnDlNote.innerText = "Error"; ui.btnDlDirect.innerText = "Error";
+                    if (canShare) { ui.btnShareNote.innerText = "Error"; ui.btnShareDirect.innerText = "Error"; }
+                    else { ui.btnDlNote.innerText = "Error"; ui.btnDlDirect.innerText = "Error"; }
                 }
             }, 50);
         }
