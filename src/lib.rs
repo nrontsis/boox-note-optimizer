@@ -8,6 +8,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{CanvasPattern, CanvasRenderingContext2d, HtmlCanvasElement, HtmlImageElement};
 use zip::{write::SimpleFileOptions, ZipArchive, ZipWriter};
+
 // ── Types ──
 
 #[derive(Clone, Debug)]
@@ -110,6 +111,7 @@ impl NoteFile {
         let mut resources = HashMap::new();
         let mut note_background = None;
         let mut templates: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut page_list: Vec<String> = Vec::new();
 
         for i in 0..archive.len() {
             let Ok(mut file) = archive.by_index(i) else {
@@ -156,7 +158,7 @@ impl NoteFile {
             } else if name.ends_with("note_info") || name == "note_tree" {
                 let mut d = Vec::new();
                 if file.read_to_end(&mut d).is_ok() {
-                    parse_note_info(&d, &mut canvas_w, &mut canvas_h, &mut note_background);
+                    parse_note_info(&d, &mut canvas_w, &mut canvas_h, &mut note_background, &mut page_list);
                 }
             } else if name.contains("resource/pb/") && !name.contains("stash") {
                 let res_key = name
@@ -188,22 +190,50 @@ impl NoteFile {
             }
         }
 
-        let mut pages = Vec::new();
-        for n in &notes {
-            let parts: Vec<&str> = n.path.split('/').collect();
-            if let Some(pos) = parts.iter().position(|&x| x == "point") {
-                if pos + 1 < parts.len() && !pages.contains(&parts[pos + 1].to_string()) {
-                    pages.push(parts[pos + 1].to_string());
+        // Use pageNameList from note_info if available; otherwise discover from paths
+        let pages = if !page_list.is_empty() {
+            // Filter to pages that actually have content (points or shapes)
+            let mut known: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for n in &notes {
+                let parts: Vec<&str> = n.path.split('/').collect();
+                if let Some(pos) = parts.iter().position(|&x| x == "point") {
+                    if pos + 1 < parts.len() {
+                        known.insert(parts[pos + 1].to_string());
+                    }
                 }
             }
-        }
-        for m in shape_meta.values() {
-            if let Some(pid) = &m.page_id {
-                if !pages.contains(pid) {
-                    pages.push(pid.clone());
+            for m in shape_meta.values() {
+                if let Some(pid) = &m.page_id {
+                    known.insert(pid.clone());
                 }
             }
-        }
+            let mut ordered: Vec<String> = page_list.into_iter().filter(|p| known.contains(p)).collect();
+            // Add any known pages not in the list (shouldn't happen but be safe)
+            for k in &known {
+                if !ordered.contains(k) {
+                    ordered.push(k.clone());
+                }
+            }
+            ordered
+        } else {
+            let mut pages = Vec::new();
+            for n in &notes {
+                let parts: Vec<&str> = n.path.split('/').collect();
+                if let Some(pos) = parts.iter().position(|&x| x == "point") {
+                    if pos + 1 < parts.len() && !pages.contains(&parts[pos + 1].to_string()) {
+                        pages.push(parts[pos + 1].to_string());
+                    }
+                }
+            }
+            for m in shape_meta.values() {
+                if let Some(pid) = &m.page_id {
+                    if !pages.contains(pid) {
+                        pages.push(pid.clone());
+                    }
+                }
+            }
+            pages
+        };
 
         Ok(NoteFile {
             pages,
@@ -564,7 +594,7 @@ pub fn parse_protobuf(data: &[u8], meta: &mut HashMap<String, ShapeMeta>, page_i
     }
 }
 
-pub fn parse_note_info(data: &[u8], w: &mut f32, h: &mut f32, bg: &mut Option<String>) {
+pub fn parse_note_info(data: &[u8], w: &mut f32, h: &mut f32, bg: &mut Option<String>, page_list: &mut Vec<String>) {
     let mut off = 0;
     while off < data.len() {
         let tag = decode_var(data, &mut off);
@@ -573,7 +603,7 @@ pub fn parse_note_info(data: &[u8], w: &mut f32, h: &mut f32, bg: &mut Option<St
             let l = decode_var(data, &mut off) as usize;
             let next_off = off.saturating_add(l);
             if next_off <= data.len() {
-                parse_note_info(&data[off..next_off], w, h, bg);
+                parse_note_info(&data[off..next_off], w, h, bg, page_list);
             }
             off = next_off;
         } else if fn_num == 13 && wt == 2 {
@@ -582,6 +612,24 @@ pub fn parse_note_info(data: &[u8], w: &mut f32, h: &mut f32, bg: &mut Option<St
                 let s = String::from_utf8_lossy(&data[off..off + l]).to_string();
                 if !s.is_empty() {
                     *bg = Some(s);
+                }
+            }
+            off += l;
+        } else if fn_num == 20 && wt == 2 {
+            // pageNameList JSON: {"pageNameList":["uuid1","uuid2",...]}
+            let l = decode_var(data, &mut off) as usize;
+            if off + l <= data.len() {
+                if let Ok(s) = std::str::from_utf8(&data[off..off + l]) {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+                        if let Some(arr) = v.get("pageNameList").and_then(|a| a.as_array()) {
+                            let names: Vec<String> = arr.iter()
+                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .collect();
+                            if !names.is_empty() {
+                                *page_list = names;
+                            }
+                        }
+                    }
                 }
             }
             off += l;
@@ -941,64 +989,7 @@ impl AppEngine {
                 self.meta_overrides.insert(stroke.uuid.clone(), (2, nbrush_width));
             }
 
-            let mut opt_pts: Vec<Point> = stroke.points.iter().enumerate().filter(|(i, _)| mask[*i]).map(|(_, p)| p.clone()).collect();
-
-            // For fill strokes, expand each surviving edge to the min/max of original
-            // edges in its neighborhood (idempotent: setting to envelope, not adding offset)
-            let is_fill = self.shape_meta.get(&stroke.uuid).map_or(false, |m| m.pen_type == 37);
-            if is_fill && opt_pts.len() >= 2 {
-                let orig = &stroke.points;
-                // Build mapping: which original pair indices survived
-                let mut survived: Vec<usize> = Vec::new();
-                let mut oi = 0;
-                for (mi, keep) in mask.iter().enumerate() {
-                    if *keep {
-                        if oi < opt_pts.len() && mi / 2 != survived.last().copied().unwrap_or(usize::MAX) {
-                            // mi is the original point index; pair index = mi / 2
-                        }
-                    }
-                }
-                // Simpler: for each pair in opt_pts, find the range of original pairs
-                // between the previous and next surviving pairs
-                let orig_pairs = orig.len() / 2;
-                let opt_pairs = opt_pts.len() / 2;
-                // Map surviving pair indices back to original pair indices
-                let mut surv_orig_idx: Vec<usize> = Vec::new();
-                {
-                    let mut oi = 0;
-                    for pi in 0..orig_pairs {
-                        if oi < opt_pairs {
-                            let ol = &orig[pi * 2];
-                            let or_ = &orig[pi * 2 + 1];
-                            let sl = &opt_pts[oi * 2];
-                            let sr = &opt_pts[oi * 2 + 1];
-                            if (ol.x - sl.x).abs() < 0.01 && (ol.y - sl.y).abs() < 0.01
-                                && (or_.x - sr.x).abs() < 0.01 && (or_.y - sr.y).abs() < 0.01 {
-                                surv_orig_idx.push(pi);
-                                oi += 1;
-                            }
-                        }
-                    }
-                }
-                // For each surviving pair, expand by 3x the difference to the envelope.
-                // Linear interpolation between surviving pairs means each endpoint only
-                // contributes half at the midpoint, so 2x compensates correctly.
-                // Idempotent: re-running on adjusted data produces the same result.
-                for si in 0..surv_orig_idx.len() {
-                    let start = if si == 0 { 0 } else { surv_orig_idx[si - 1] + 1 };
-                    let end = if si + 1 < surv_orig_idx.len() { surv_orig_idx[si + 1] } else { orig_pairs };
-                    let mut min_left = opt_pts[si * 2].x;
-                    let mut max_right = opt_pts[si * 2 + 1].x;
-                    for pi in start..end {
-                        min_left = min_left.min(orig[pi * 2].x);
-                        max_right = max_right.max(orig[pi * 2 + 1].x);
-                    }
-                    let cur_left = opt_pts[si * 2].x;
-                    let cur_right = opt_pts[si * 2 + 1].x;
-                    opt_pts[si * 2].x = 3.0 * min_left - cur_left;
-                    opt_pts[si * 2 + 1].x = 3.0 * max_right - cur_right;
-                }
-            }
+            let opt_pts: Vec<Point> = stroke.points.iter().enumerate().filter(|(i, _)| mask[*i]).map(|(_, p)| p.clone()).collect();
 
             new_strokes.push(Stroke { uuid: stroke.uuid.clone(), points: opt_pts });
         }
@@ -1535,6 +1526,20 @@ impl AppEngine {
             .unwrap_or("");
         let coords = geometry.get("coordinates");
 
+        // Check for per-feature fill (in properties.fillAttr)
+        let fill_color: Option<String> = feature.get("properties")
+            .and_then(|p| p.get("fillAttr"))
+            .and_then(|fa| {
+                if fa.get("enableColor").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    fa.get("color").and_then(|v| v.as_i64()).map(|c| {
+                        let cu = c as u32;
+                        let r = (cu >> 16) & 0xFF; let g = (cu >> 8) & 0xFF; let b = cu & 0xFF;
+                        let a = ((cu >> 24) & 0xFF) as f64 / 255.0;
+                        format!("rgba({},{},{},{})", r, g, b, a)
+                    })
+                } else { None }
+            });
+
         // Check for per-feature stroke overrides (in properties.strokeAttr)
         if let Some(stroke_attr) = feature.get("properties").and_then(|p| p.get("strokeAttr")) {
             if let Some(w) = stroke_attr.get("width").and_then(|v| v.as_f64()) {
@@ -1549,7 +1554,6 @@ impl AppEngine {
                 let a = ((cu >> 24) & 0xFF) as f64 / 255.0;
                 let col = format!("rgba({},{},{},{})", r, g, b, a);
                 ctx.set_stroke_style_str(&col);
-                ctx.set_fill_style_str(&col);
             }
         }
 
@@ -1700,6 +1704,10 @@ impl AppEngine {
                         if first { ctx.move_to(x, y); first = false; } else { ctx.line_to(x, y); }
                     }
                     ctx.close_path();
+                    if let Some(ref fc) = fill_color {
+                        ctx.set_fill_style_str(fc);
+                        ctx.fill();
+                    }
                     ctx.stroke();
                 }
             },
@@ -1724,6 +1732,10 @@ impl AppEngine {
                             if rx > 0.1 && ry > 0.1 {
                                 ctx.begin_path();
                                 let _ = ctx.ellipse(cx, cy, rx, ry, 0.0, 0.0, 2.0 * std::f64::consts::PI);
+                                if let Some(ref fc) = fill_color {
+                                    ctx.set_fill_style_str(fc);
+                                    ctx.fill();
+                                }
                                 ctx.stroke();
                             }
                         }
@@ -1771,6 +1783,10 @@ impl AppEngine {
                                 };
                                 ctx.begin_path();
                                 let _ = ctx.ellipse(ecx, ecy, rx, ry, 0.0, start, end);
+                                if let Some(ref fc) = fill_color {
+                                    ctx.set_fill_style_str(fc);
+                                    ctx.fill();
+                                }
                                 ctx.stroke();
                             }
                         }
@@ -1810,7 +1826,7 @@ impl AppEngine {
                         }
                     },
                     _ => {
-                        // Unknown subtype — draw as polyline
+                        // Unknown subtype — draw as polyline/polygon
                         if !pts.is_empty() {
                             ctx.begin_path();
                             for (i, pt) in pts.iter().enumerate() {
@@ -1818,6 +1834,11 @@ impl AppEngine {
                                     let (x, y) = transform_point(&p, matrix);
                                     if i == 0 { ctx.move_to(x, y); } else { ctx.line_to(x, y); }
                                 }
+                            }
+                            if fill_color.is_some() { ctx.close_path(); }
+                            if let Some(ref fc) = fill_color {
+                                ctx.set_fill_style_str(fc);
+                                ctx.fill();
                             }
                             ctx.stroke();
                         }
