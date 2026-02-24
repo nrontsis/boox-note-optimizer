@@ -82,6 +82,7 @@
         }
     </script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@4.2.0/dist/jspdf.umd.min.js"></script>
     <style>
         body { overscroll-behavior: none; }
         .will-change-transform { will-change: transform; transform-origin: top left; }
@@ -154,7 +155,7 @@
                 
                 <div id="exportVisualsSection" class="hidden flex-col gap-2">
                     <span class="text-[10px] md:text-[11px] font-bold text-gray-400 uppercase tracking-widest">Export Visuals</span>
-                    <button id="btnOptPng" class="w-full py-2.5 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed">Download as PNG</button>
+                    <button id="btnOptPdf" class="w-full py-2.5 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed">Download as PDF</button>
                 </div>
             </div>
 
@@ -396,7 +397,7 @@
             tracks: document.querySelectorAll('.canvas-track'), cOrig: document.getElementById('cOrig'), cDeb: document.getElementById('cDeb'),
             
             paginator: document.getElementById('paginator'), pageText: document.getElementById('pageText'), btnResetZoom: document.getElementById('btnResetZoom'),
-            btnDlNote: document.getElementById('btnDlNote'), btnOptPng: document.getElementById('btnOptPng'),
+            btnDlNote: document.getElementById('btnDlNote'), btnOptPdf: document.getElementById('btnOptPdf'),
             exportVisualsSection: document.getElementById('exportVisualsSection'), btnReportIssue: document.getElementById('btnReportIssue'),
 
             chkAutoPreview: document.getElementById('chkAutoPreview'),
@@ -634,7 +635,7 @@
 
             ui.exportVisualsSection.classList.remove('hidden');
             ui.exportVisualsSection.classList.add('flex');
-            ui.btnOptPng.disabled = false;
+            ui.btnOptPdf.disabled = false;
 
             // Toggle comparison vs optimized-only layout
             if (comparison) {
@@ -715,7 +716,7 @@
                 ui.paneRight.querySelector('.absolute.top-2').classList.add('hidden');
                 ui.exportVisualsSection.classList.remove('hidden');
                 ui.exportVisualsSection.classList.add('flex');
-                ui.btnOptPng.disabled = true;
+                ui.btnOptPdf.disabled = true;
             } else {
                 ui.workspaceView.classList.add('hidden');
                 ui.workspaceView.classList.remove('flex');
@@ -723,7 +724,7 @@
                 ui.previewPlaceholder.classList.add('flex');
                 ui.exportVisualsSection.classList.add('hidden');
                 ui.exportVisualsSection.classList.remove('flex');
-                ui.btnOptPng.disabled = true;
+                ui.btnOptPdf.disabled = true;
             }
 
             page = 0;
@@ -950,7 +951,7 @@
         async function debouncedProcess() {
             clearTimeout(debounceTimer);
 
-            [ui.btnDlNote, ui.btnOptPng, ui.btnLoadPreview, ui.btnDlDirect].forEach(b => { if(b) b.disabled = true; });
+            [ui.btnDlNote, ui.btnOptPdf, ui.btnLoadPreview, ui.btnDlDirect].forEach(b => { if(b) b.disabled = true; });
             ui.btnDlNote.innerText = "Optimizing...";
             if (ui.btnDlDirect) ui.btnDlDirect.innerText = "Optimizing...";
             ui.optResults.innerHTML = '<span class="animate-pulse text-blue-600 font-semibold">Processing...</span>';
@@ -999,7 +1000,7 @@
                     ui.btnLoadPreview.disabled = false;
 
                     if (previewEnabled) {
-                        ui.btnOptPng.disabled = false;
+                        ui.btnOptPdf.disabled = false;
                         renderCanvases();
                         fitToScreen();
                     } else if (ui.chkAutoPreview.checked) {
@@ -1023,11 +1024,26 @@
 
         ui.btnDlNote.onclick = () => { if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`); };
 
-        ui.btnOptPng.onclick = () => {
+        ui.btnOptPdf.onclick = async () => {
             if(!app || !previewEnabled) return;
-            ui.cDeb.toBlob((blob) => {
-                if (blob) downloadUrl(URL.createObjectURL(blob), `${filename}_Pg${page+1}_opt.png`);
-            }, "image/png");
+            const n = app.get_page_count();
+            const w = app.get_canvas_width();
+            const h = app.get_canvas_height();
+            const tmp = document.createElement('canvas');
+            tmp.width = w; tmp.height = h;
+            const { jsPDF } = window.jspdf;
+            let pdf = null;
+            for (let i = 0; i < n; i++) {
+                app.render_page(tmp, true, i);
+                const imgData = tmp.toDataURL('image/jpeg', 0.85);
+                if (i === 0) {
+                    pdf = new jsPDF({ orientation: w > h ? 'l' : 'p', unit: 'px', format: [w, h] });
+                } else {
+                    pdf.addPage([w, h], w > h ? 'l' : 'p');
+                }
+                pdf.addImage(imgData, 'JPEG', 0, 0, w, h);
+            }
+            if (pdf) pdf.save(`${filename}_optimized.pdf`);
         };
 
         })().catch(function(err) {
