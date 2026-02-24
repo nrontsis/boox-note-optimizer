@@ -1,9 +1,8 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Loading...</title></head><body>
-<p id="msg">Loading shared file...</p>
+<title>Share Debug</title></head><body>
 <script>
-// Fallback page: SW didn't intercept the share POST (cold start / SW not yet active).
+alert('SHARE FALLBACK: SW did not intercept. URL=' + location.href + ' method=GET(fallback)');
 // Register SW so future shares work, then redirect to app.
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').then(reg => {
@@ -12,11 +11,13 @@ if ('serviceWorker' in navigator) {
       sw.addEventListener('statechange', () => { if (sw.state === 'active') r(sw); });
     });
   }).then(() => {
-    document.getElementById('msg').textContent = 'Please try sharing again — the app is now ready.';
-  }).catch(() => {
+    alert('SW now active. Please try sharing again.');
+  }).catch(e => {
+    alert('SW registration failed: ' + e.message);
     window.location.href = './';
   });
 } else {
+  alert('No SW support');
   window.location.href = './';
 }
 </script>

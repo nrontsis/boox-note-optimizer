@@ -2,7 +2,7 @@
   "name": "Optimizer for Boox Notes",
   "short_name": "Note Optimizer",
   "description": "Optimize Boox .note files by removing redundant stroke data",
-  "start_url": ".",
+  "start_url": "/boox-note-optimizer/",
   "display": "standalone",
   "background_color": "#f3f4f6",
   "theme_color": "#ffffff",
@@ -12,14 +12,14 @@
   ],
   "file_handlers": [
     {
-      "action": "./",
+      "action": "/boox-note-optimizer/",
       "accept": {
         "application/octet-stream": [".note"]
       }
     }
   ],
   "share_target": {
-    "action": "./share",
+    "action": "/boox-note-optimizer/share",
     "method": "POST",
     "enctype": "multipart/form-data",
     "params": {
