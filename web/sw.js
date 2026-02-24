@@ -1,4 +1,4 @@
-const CACHE_NAME = 'boox-optimizer-v16';
+const CACHE_NAME = 'boox-optimizer-v18';
 
 const APP_SHELL = [
   './',
@@ -28,6 +28,22 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+
+  // Handle Web Share Target POST — stash file and redirect to app
+  if (url.pathname.endsWith('/share') && event.request.method === 'POST') {
+    event.respondWith((async () => {
+      const formData = await event.request.formData();
+      const file = formData.get('file');
+      if (file) {
+        const cache = await caches.open('share-target');
+        await cache.put('/shared-file', new Response(file, {
+          headers: { 'X-Filename': file.name, 'Content-Type': 'application/octet-stream' }
+        }));
+      }
+      return Response.redirect('./?shared=1', 303);
+    })());
+    return;
+  }
 
   // Skip demo.note — large and not essential for offline
   if (url.pathname.endsWith('demo.note')) return;

@@ -17,5 +17,18 @@
         "application/octet-stream": [".note"]
       }
     }
-  ]
+  ],
+  "share_target": {
+    "action": "./share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [
+        {
+          "name": "file",
+          "accept": ["application/octet-stream", ".note"]
+        }
+      ]
+    }
+  }
 }
