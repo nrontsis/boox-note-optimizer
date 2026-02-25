@@ -415,7 +415,7 @@
         };
 
         // --- Web Share API detection ---
-        const canShare = /Android/i.test(navigator.userAgent) && navigator.canShare && navigator.canShare({ files: [new File([''], 'test.note', { type: 'application/octet-stream' })] });
+        const canShare = window.Android || (/Android/i.test(navigator.userAgent) && navigator.canShare && navigator.canShare({ files: [new File([''], 'test.note', { type: 'application/octet-stream' })] }));
         if (!canShare) {
             // Hide share buttons, make download buttons full-width primary style
             [ui.btnShareNote, ui.btnShareDirect].forEach(b => { b.classList.add('hidden'); });
@@ -643,30 +643,20 @@
 
         async function shareOptimizedFile() {
             if (!optimizedBlob) return;
-            const file = new File([optimizedBlob], `${filename}_optimized.note`, { type: 'application/octet-stream' });
-
-            // DEBUG: try multiple share methods to find what works
-            const results = [];
-
-            // Test 1: share with files
+            // In WebView APK: downloadUrl triggers DownloadListener → native share
+            if (window.Android) {
+                downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`);
+                return;
+            }
+            // Try Web Share API, fall back to download
             try {
+                const file = new File([optimizedBlob], `${filename}_optimized.note`, { type: 'application/octet-stream' });
                 await navigator.share({ files: [file] });
-                return; // success
             } catch(e) {
-                if (e.name === 'AbortError') return;
-                results.push('files: ' + e.name + ': ' + e.message);
+                if (e.name !== 'AbortError') {
+                    downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`);
+                }
             }
-
-            // Test 2: share URL only
-            try {
-                await navigator.share({ title: 'test', url: location.href });
-                results.push('url-only: OK');
-            } catch(e) {
-                if (e.name === 'AbortError') return;
-                results.push('url-only: ' + e.name + ': ' + e.message);
-            }
-
-            alert('Share diagnostics:\n' + results.join('\n'));
         }
         ui.btnShareNote.onclick = shareOptimizedFile;
         ui.btnShareDirect.onclick = shareOptimizedFile;

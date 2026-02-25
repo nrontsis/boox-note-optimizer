@@ -1,0 +1,57 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.nrontsis.noteoptimizer'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "io.github.nrontsis.noteoptimizer"
+        minSdk 21
+        targetSdk 35
+        versionCode 1
+        versionName "1.0"
+    }
+
+    signingConfigs {
+        release {
+            def ksFile = file(System.getenv("KEYSTORE_PATH") ?: "../keystore.jks")
+            def ksPwd  = System.getenv("KEYSTORE_PASSWORD") ?: "noteoptimizer"
+            if (ksFile.exists()) {
+                storeFile ksFile
+                storePassword ksPwd
+                keyAlias "key0"
+                keyPassword ksPwd
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    tasks.withType(JavaCompile) {
+        options.compilerArgs << '-Xlint:deprecation'
+    }
+}
+
+configurations.all {
+    resolutionStrategy {
+        force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+}

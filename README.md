@@ -6,7 +6,18 @@ This web app is a PWA with offline support. A service worker (`web/sw.js`) cache
 > [!IMPORTANT]
 > Bump the `CACHE_NAME` version in `sw.js` when deploying changes to force clients to re-fetch.
 
-An Android APK can be built from the PWA using [PWABuilder](https://www.pwabuilder.com/), which enables the "Share with" functionality on Boox tablets. For the TWA to run in full trusted mode (no URL bar, share target support), a [Digital Asset Links](https://developers.google.com/digital-asset-links) file must be served at `https://<domain>/.well-known/assetlinks.json` with the APK's signing key fingerprint.
+### Android APK
+
+The `android/` directory contains a minimal WebView-based Android app that enables native file sharing on Boox tablets (the Web Share API in Chrome blocks `.note` files). It intercepts downloads from the web app and turns them into native Android share intents, and can also receive shared `.note` files from the Boox Notes app.
+
+Build with Docker (no local Android SDK needed):
+
+```bash
+cd android
+./build.sh              # generates keystore on first run, builds signed APK
+```
+
+The script prints the APK path. Install the APK on your Boox device to enable native share-to/share-from with the Notes app.
 
 ## Overview of the document
 

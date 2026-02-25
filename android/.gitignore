@@ -1,0 +1,16 @@
+# Gradle
+.gradle/
+build/
+app/build/
+gradlew
+gradlew.bat
+gradle/wrapper/gradle-wrapper.jar
+
+# Signing
+keystore.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
+local.properties
