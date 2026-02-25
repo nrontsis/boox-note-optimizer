@@ -488,6 +488,7 @@
                     return alert("Google APIs are still loading or are blocked. Please try again in a moment.");
                 }
 
+                try {
                 if (!tokenClient) {
                     tokenClient = google.accounts.oauth2.initTokenClient({
                         client_id: GOOGLE_CLIENT_ID,
@@ -502,11 +503,18 @@
                         }
                     });
                 }
+                } catch(err) {
+                    return alert("Google Drive sign-in failed.\n\nYou can also load files via the local file picker or by sharing from another app.\n\n" + err.message);
+                }
 
-                if (oauthToken) {
-                    createPicker();
-                } else {
-                    tokenClient.requestAccessToken();
+                try {
+                    if (oauthToken) {
+                        createPicker();
+                    } else {
+                        tokenClient.requestAccessToken();
+                    }
+                } catch(err) {
+                    return alert("Google Drive sign-in failed.\n\nYou can also load files via the local file picker or by sharing from another app.\n\n" + err.message);
                 }
             };
         }
