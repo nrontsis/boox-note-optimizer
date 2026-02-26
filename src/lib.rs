@@ -1055,13 +1055,7 @@ impl AppEngine {
             .map(|(k, _)| k.clone()).collect();
         for k in shape_keys { let ts = self.shape_meta[&k].created_ts; render_list.push((ts, RenderItem::Shape(k))); }
 
-        render_list.sort_by_key(|(ts, item)| {
-            let is_fill = match item {
-                RenderItem::Stroke(s) => self.shape_meta.get(&s.uuid).map_or(false, |m| m.pen_type == 37),
-                RenderItem::Shape(_) => false,
-            };
-            (if is_fill { 0u8 } else { 1 }, *ts)
-        });
+        render_list.sort_by_key(|(ts, _)| *ts);
 
         for (_, item) in &render_list {
             match item {
@@ -1130,12 +1124,9 @@ impl AppEngine {
             .filter(|n| n.path.contains(page_id))
             .flat_map(|n| &n.strokes)
             .collect();
-        // Sort by created_ts to match render_page z-order (fills first, then timestamp)
+        // Sort by created_ts to match render_page z-order
         strokes.sort_by_key(|s| {
-            let meta = self.shape_meta.get(&s.uuid);
-            let is_fill = meta.map_or(false, |m| m.pen_type == 37);
-            let ts = meta.map_or(0, |m| m.created_ts);
-            (if is_fill { 0u8 } else { 1 }, ts)
+            self.shape_meta.get(&s.uuid).map_or(0, |m| m.created_ts)
         });
 
         let mut out_strokes = Vec::new();
@@ -1679,31 +1670,26 @@ impl AppEngine {
                 }
             },
             "Polygon" => {
-                // Coords: [[ [start,end], [start,end], ... ]]
-                // Each element is a pair [startPt, endPt]. Extract first point of each pair as vertex.
-                let rings = match coords.and_then(|c| c.as_array()) {
+                // Boox Polygon coords are edge pairs: [[startPt, endPt], [startPt, endPt], ...]
+                // Each element is a 2-point line segment. Extract first point of each edge
+                // to form the polygon vertex list, then draw as a single filled polygon.
+                let edges = match coords.and_then(|c| c.as_array()) {
                     Some(a) => a,
                     _ => { if has_dash { ctx.set_line_dash(&js_sys::Array::new()).ok(); } return; },
                 };
-                for ring in rings {
-                    let pairs = match ring.as_array() {
-                        Some(a) if !a.is_empty() => a,
-                        _ => continue,
-                    };
+                if edges.len() >= 2 {
                     ctx.begin_path();
                     let mut first = true;
-                    for pair in pairs {
-                        let arr = match pair.as_array() {
+                    for edge in edges {
+                        let pair = match edge.as_array() {
                             Some(a) if !a.is_empty() => a,
                             _ => continue,
                         };
-                        // pair is [[x0,y0],[x1,y1]] — take first element
-                        let vertex = if let Some(inner) = arr[0].as_array() {
-                            // Nested: [[x,y], ...]
-                            [inner[0].as_f64().unwrap_or(0.0), inner[1].as_f64().unwrap_or(0.0)]
+                        // edge is [[x0,y0],[x1,y1]] — take first point as vertex
+                        let vertex = if let Some(start_pt) = pair[0].as_array() {
+                            [start_pt[0].as_f64().unwrap_or(0.0), start_pt[1].as_f64().unwrap_or(0.0)]
                         } else {
-                            // Flat: [x, y] — the pair itself is the vertex
-                            [arr[0].as_f64().unwrap_or(0.0), arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0)]
+                            [pair[0].as_f64().unwrap_or(0.0), pair.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0)]
                         };
                         let (x, y) = transform_point(&vertex, matrix);
                         if first { ctx.move_to(x, y); first = false; } else { ctx.line_to(x, y); }

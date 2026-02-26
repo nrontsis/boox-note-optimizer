@@ -393,7 +393,7 @@ The page size is **1860 x 2480 points** (approximately 25.83 x 34.44 inches at 7
 
 Strokes are rendered bottom-to-top sorted by creation timestamp (shape protobuf field 2). Within a page, the `#points` index order may differ from creation order; the shape metadata's timestamp is the authoritative sort key. Later strokes render on top of earlier ones.
 
-**Fill-first ordering:** Fill strokes (pen_type 37) are rendered before all other strokes, regardless of timestamp. This ensures fills appear behind the outline strokes that border them, matching the device's observed rendering behavior.
+Fill strokes (pen_type 37) are rendered in timestamp order like all other strokes.
 
 ### Stash (Undo History)
 
