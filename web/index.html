@@ -829,6 +829,7 @@
             try { await loadBuffer(new Uint8Array(await file.arrayBuffer())); }
             catch (err) { alert("Corrupted .note file format: " + err); }
         };
+        window.loadFile = loadFile;
 
         window.loadDemo = async (e) => {
             if(e) { e.preventDefault(); e.stopPropagation(); }

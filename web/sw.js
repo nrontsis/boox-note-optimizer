@@ -1,4 +1,4 @@
-const CACHE_NAME = 'boox-optimizer-v35';
+const CACHE_NAME = 'boox-optimizer-v36';
 
 const APP_SHELL = [
   './',
@@ -20,7 +20,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => k !== CACHE_NAME && k !== 'share-target').map((k) => caches.delete(k)))
     )
   );
   self.clients.claim();

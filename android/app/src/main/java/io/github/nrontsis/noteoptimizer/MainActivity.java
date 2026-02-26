@@ -43,12 +43,17 @@ public class MainActivity extends AppCompatActivity {
         cv.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
         cv.put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream");
         cv.put(MediaStore.Downloads.RELATIVE_PATH, EXPORT_FOLDER);
+        cv.put(MediaStore.Downloads.IS_PENDING, 1);
         Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
         if (uri == null) throw new IOException("Failed to create Downloads entry");
         try (OutputStream os = getContentResolver().openOutputStream(uri)) {
             if (os == null) throw new IOException("Failed to open output stream");
             os.write(data);
         }
+        // Mark as complete so other apps can read it
+        ContentValues done = new ContentValues();
+        done.put(MediaStore.Downloads.IS_PENDING, 0);
+        getContentResolver().update(uri, done, null, null);
         return uri;
     }
 
@@ -172,18 +177,15 @@ public class MainActivity extends AppCompatActivity {
             String base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
             String name = getFileName(uri);
 
+            // Call window.loadFile directly (exposed by the web app's module script)
             String js =
-                "(async function() {" +
-                "  try {" +
-                "    const b64 = '" + base64 + "';" +
-                "    const binary = atob(b64);" +
-                "    const bytes = new Uint8Array(binary.length);" +
-                "    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);" +
-                "    const blob = new Blob([bytes], {type:'application/octet-stream'});" +
-                "    const cache = await caches.open('share-target');" +
-                "    await cache.put('/shared-file', new Response(blob, {headers:{'X-Filename':'" + name.replace("'", "\\'") + "'}}));" +
-                "    location.reload();" +
-                "  } catch(e) { console.error('inbound share failed', e); }" +
+                "(function() {" +
+                "  const b64 = '" + base64 + "';" +
+                "  const binary = atob(b64);" +
+                "  const bytes = new Uint8Array(binary.length);" +
+                "  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);" +
+                "  const file = new File([bytes], " + jsString(name) + ", {type:'application/octet-stream'});" +
+                "  window.loadFile(file);" +
                 "})();";
             webView.evaluateJavascript(js, null);
         } catch (Exception e) {
