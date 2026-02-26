@@ -2,4 +2,5 @@
 <paths>
     <cache-path name="shared" path="shared/" />
     <cache-path name="export" path="export/" />
+    <external-files-path name="ext_export" path="export/" />
 </paths>

@@ -387,8 +387,8 @@
         let app = null;
         let filename = "document";
         function exportName() {
-            // Strip any existing __HH_mm suffix, then append current time
-            const base = filename.replace(/__\d{2}_\d{2}$/, '');
+            // Strip existing __HH_mm suffix and (N) copy suffixes, then append current time
+            const base = filename.replace(/\(\d+\)$/, '').replace(/__\d{2}_\d{2}$/, '').trimEnd();
             const now = new Date();
             const hh = String(now.getHours()).padStart(2, '0');
             const mm = String(now.getMinutes()).padStart(2, '0');
@@ -684,9 +684,14 @@
 
         async function shareOptimizedFile() {
             if (!optimizedBlob) return;
-            // In WebView APK: downloadUrl triggers DownloadListener → native share
+            // In WebView APK: convert blob to base64 and call native bridge directly
             if (window.Android) {
-                downloadUrl(URL.createObjectURL(optimizedBlob), exportName());
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const base64 = reader.result.split(',')[1];
+                    window.Android.receiveFile(base64, exportName());
+                };
+                reader.readAsDataURL(optimizedBlob);
                 return;
             }
             // Try Web Share API, fall back to download

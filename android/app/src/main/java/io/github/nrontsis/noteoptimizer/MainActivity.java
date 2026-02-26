@@ -1,8 +1,11 @@
 package io.github.nrontsis.noteoptimizer;
 
+import android.content.ContentValues;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.util.Base64;
 import android.util.Log;
 import android.webkit.*;
@@ -24,24 +27,32 @@ public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
 
-    /** Clean up temp export directory, write file, return its File. */
-    private File writeToTempDir(byte[] data, String fileName) throws IOException {
-        File dir = new File(getCacheDir(), "export");
-        // Clean previous exports
-        if (dir.exists()) {
-            File[] old = dir.listFiles();
-            if (old != null) for (File f : old) f.delete();
-        } else {
-            dir.mkdirs();
+    private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/Note Optimizer";
+
+    /** Write file to Downloads/Note Optimizer via MediaStore. Cleans folder first. */
+    private Uri writeToDownloads(byte[] data, String fileName) throws IOException {
+        // Clean all previous exports in our subfolder
+        try {
+            getContentResolver().delete(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                MediaStore.Downloads.RELATIVE_PATH + "=?",
+                new String[]{EXPORT_FOLDER + "/"});
+        } catch (Exception ignored) {}
+
+        ContentValues cv = new ContentValues();
+        cv.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
+        cv.put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream");
+        cv.put(MediaStore.Downloads.RELATIVE_PATH, EXPORT_FOLDER);
+        Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+        if (uri == null) throw new IOException("Failed to create Downloads entry");
+        try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+            if (os == null) throw new IOException("Failed to open output stream");
+            os.write(data);
         }
-        File out = new File(dir, fileName);
-        try (FileOutputStream fos = new FileOutputStream(out)) {
-            fos.write(data);
-        }
-        return out;
+        return uri;
     }
 
-    /** Try to open a file in Boox Notes, trying multiple actions and MIME types. */
+    /** Try to open a file in Boox Notes via MediaStore URI, then chooser. */
     private void openInBooxNotes(Uri uri) {
         String[] actions = {Intent.ACTION_VIEW, Intent.ACTION_SEND};
         String[] mimes = {"application/zip", "application/x-zip-compressed",
@@ -60,21 +71,16 @@ public class MainActivity extends AppCompatActivity {
                 intent.setPackage(BOOX_NOTES);
                 try {
                     startActivity(intent);
-                    String msg = "Opened via " + action.replace("android.intent.action.", "") + " [" + mime + "]";
-                    Log.i(TAG, msg);
-                    runOnUiThread(() -> Toast.makeText(this, msg, Toast.LENGTH_SHORT).show());
                     return;
                 } catch (Exception ignored) {}
             }
         }
 
         // Fallback: chooser
-        Log.w(TAG, "Boox Notes didn't handle any intent, showing chooser");
-        runOnUiThread(() -> Toast.makeText(this, "Boox Notes unavailable, showing chooser", Toast.LENGTH_SHORT).show());
         Intent fallback = new Intent(Intent.ACTION_VIEW);
         fallback.setDataAndType(uri, "application/octet-stream");
         fallback.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        startActivity(Intent.createChooser(fallback, "Open optimized file with"));
+        startActivity(Intent.createChooser(fallback, "Open with"));
     }
 
     /* ── JS bridge: receives base64 file data from the web page ── */
@@ -83,8 +89,7 @@ public class MainActivity extends AppCompatActivity {
         public void receiveFile(String base64, String fileName) {
             try {
                 byte[] data = Base64.decode(base64, Base64.DEFAULT);
-                File out = writeToTempDir(data, fileName);
-                Uri uri = FileProvider.getUriForFile(MainActivity.this, PROVIDER, out);
+                Uri uri = writeToDownloads(data, fileName);
                 openInBooxNotes(uri);
             } catch (Exception e) {
                 Log.e(TAG, "receiveFile failed", e);
