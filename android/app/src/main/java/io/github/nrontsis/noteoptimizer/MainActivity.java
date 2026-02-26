@@ -106,6 +106,9 @@ public class MainActivity extends AppCompatActivity {
         Uri uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri.class);
         if (uri == null) return;
 
+        // Clear the intent so we don't re-process it on page reload
+        setIntent(new Intent(Intent.ACTION_MAIN));
+
         try {
             InputStream is = getContentResolver().openInputStream(uri);
             if (is == null) return;
