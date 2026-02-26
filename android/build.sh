@@ -41,12 +41,12 @@ docker run --rm \
             gradle wrapper --gradle-version 8.11.1 --no-daemon
         fi
         ./gradlew assembleRelease --no-daemon
+        cp app/build/outputs/apk/release/app-release.apk /project/NoteOptimizer.apk
+        rm -rf app/build/outputs/apk
     "
 
-APK_BUILD="app/build/outputs/apk/release/app-release.apk"
 APK="NoteOptimizer.apk"
-if [ -f "$APK_BUILD" ]; then
-    mv "$APK_BUILD" "$APK"
+if [ -f "$APK" ]; then
     echo ""
     echo "==> APK built successfully: android/$APK"
     echo ""
