@@ -27,7 +27,7 @@ public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
 
-    private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/.NoteOptimizer";
+    private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/Note Optimizer";
 
     /** Write file to Downloads/Note Optimizer via MediaStore. Cleans folder first. */
     private Uri writeToDownloads(byte[] data, String fileName) throws IOException {

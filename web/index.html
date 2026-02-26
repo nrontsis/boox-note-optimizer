@@ -207,6 +207,13 @@
                             </label>
                             <p class="text-[10px] md:text-[11px] text-gray-500 mt-1.5 ml-7">Skip the comparison view and show the optimized preview directly after processing.</p>
                         </div>
+                        <div class="border-t border-gray-100 pt-4">
+                            <label class="flex items-center gap-3 cursor-pointer">
+                                <input type="checkbox" id="chkAutoOpen" class="w-4 h-4 accent-black cursor-pointer rounded">
+                                <span class="text-xs md:text-sm font-bold text-gray-900">Auto-open after optimization</span>
+                            </label>
+                            <p class="text-[10px] md:text-[11px] text-gray-500 mt-1.5 ml-7">Automatically open the optimized file in Boox Notes after processing. Only works in the Android app.</p>
+                        </div>
                     </div>
                 </details>
             </div>
@@ -427,6 +434,7 @@
             exportVisualsSection: document.getElementById('exportVisualsSection'), btnReportIssue: document.getElementById('btnReportIssue'),
 
             chkAutoPreview: document.getElementById('chkAutoPreview'),
+            chkAutoOpen: document.getElementById('chkAutoOpen'),
 
             btnHome: document.getElementById('headerHomeBtn'),
             btnDrive: document.getElementById('btnDrive'), txtDrive: document.getElementById('txtDrive'),
@@ -469,6 +477,7 @@
         const LS_SOURCE = 'boox_file_source';
         const LS_FOLDER = 'boox_gdrive_folder';
         const LS_AUTO_PREVIEW = 'boox_auto_preview';
+        const LS_AUTO_OPEN = 'boox_auto_open';
 
         function saveToken(token, expiresIn) {
             try { localStorage.setItem(LS_TOKEN, JSON.stringify({ token, expires_at: Date.now() + (expiresIn - 60) * 1000 })); } catch(e) {}
@@ -501,6 +510,12 @@
         ui.chkAutoPreview.checked = localStorage.getItem(LS_AUTO_PREVIEW) === 'true';
         ui.chkAutoPreview.addEventListener('change', () => {
             try { localStorage.setItem(LS_AUTO_PREVIEW, ui.chkAutoPreview.checked); } catch(e) {}
+        });
+
+        // --- Auto-open setting (persists via localStorage) ---
+        ui.chkAutoOpen.checked = localStorage.getItem(LS_AUTO_OPEN) === 'true';
+        ui.chkAutoOpen.addEventListener('change', () => {
+            try { localStorage.setItem(LS_AUTO_OPEN, ui.chkAutoOpen.checked); } catch(e) {}
         });
 
         let fileSource = null; // { type: 'gdrive'|'local'|'demo', id?, name?, size?, file? }
@@ -1116,7 +1131,9 @@
                     }
                     ui.btnLoadPreview.disabled = false;
 
-                    if (previewEnabled) {
+                    if (ui.chkAutoOpen.checked && window.Android) {
+                        shareOptimizedFile();
+                    } else if (previewEnabled) {
                         ui.btnOptPdf.disabled = false;
                         renderCanvases();
                         fitToScreen();
