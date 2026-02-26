@@ -8,16 +8,20 @@ This web app is a PWA with offline support. A service worker (`web/sw.js`) cache
 
 ### Android APK
 
-The `android/` directory contains a minimal WebView-based Android app that enables native file sharing on Boox tablets (the Web Share API in Chrome blocks `.note` files). It intercepts downloads from the web app and turns them into native Android share intents, and can also receive shared `.note` files from the Boox Notes app.
+A pre-built APK is available in [GitHub Releases](https://github.com/nrontsis/boox-note-optimizer/releases). Install it on your Boox device for the best experience:
 
-Build with Docker (no local Android SDK needed):
+- **Open in Notes**: After optimization, tap "Open" to launch the result directly in the Boox Notes app
+- **Receive shared files**: Share a `.note` file from the Notes app to Note Optimizer
+- **Offline**: Works offline after first load (the web app is cached by the service worker)
+
+Exported files are saved to `Downloads/Note Optimizer/` and automatically cleaned up on each export.
+
+To build from source (Docker, no local Android SDK needed):
 
 ```bash
 cd android
-./build.sh              # generates keystore on first run, builds signed APK
+./build.sh              # generates keystore on first run, outputs NoteOptimizer.apk
 ```
-
-The script prints the APK path. Install the APK on your Boox device to enable native share-to/share-from with the Notes app.
 
 ## Overview of the document
 
