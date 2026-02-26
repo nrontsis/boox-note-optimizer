@@ -830,6 +830,10 @@
             catch (err) { alert("Corrupted .note file format: " + err); }
         };
         window.loadFile = loadFile;
+        if (window._pendingShareFile) {
+            loadFile(window._pendingShareFile);
+            delete window._pendingShareFile;
+        }
 
         window.loadDemo = async (e) => {
             if(e) { e.preventDefault(); e.stopPropagation(); }

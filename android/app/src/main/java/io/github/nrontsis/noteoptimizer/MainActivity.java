@@ -27,7 +27,7 @@ public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
 
-    private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/Note Optimizer";
+    private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/.NoteOptimizer";
 
     /** Write file to Downloads/Note Optimizer via MediaStore. Cleans folder first. */
     private Uri writeToDownloads(byte[] data, String fileName) throws IOException {
@@ -35,8 +35,8 @@ public class MainActivity extends AppCompatActivity {
         try {
             getContentResolver().delete(
                 MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                MediaStore.Downloads.RELATIVE_PATH + "=?",
-                new String[]{EXPORT_FOLDER + "/"});
+                MediaStore.Downloads.RELATIVE_PATH + " IN (?,?)",
+                new String[]{EXPORT_FOLDER + "/", EXPORT_FOLDER});
         } catch (Exception ignored) {}
 
         ContentValues cv = new ContentValues();
@@ -177,7 +177,7 @@ public class MainActivity extends AppCompatActivity {
             String base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
             String name = getFileName(uri);
 
-            // Call window.loadFile directly (exposed by the web app's module script)
+            // Stash file on window; web app picks it up once WASM is ready
             String js =
                 "(function() {" +
                 "  const b64 = '" + base64 + "';" +
@@ -185,7 +185,8 @@ public class MainActivity extends AppCompatActivity {
                 "  const bytes = new Uint8Array(binary.length);" +
                 "  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);" +
                 "  const file = new File([bytes], " + jsString(name) + ", {type:'application/octet-stream'});" +
-                "  window.loadFile(file);" +
+                "  if (window.loadFile) window.loadFile(file);" +
+                "  else window._pendingShareFile = file;" +
                 "})();";
             webView.evaluateJavascript(js, null);
         } catch (Exception e) {
