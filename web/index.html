@@ -394,12 +394,13 @@
         let app = null;
         let filename = "document";
         function exportName() {
-            // Strip existing __HH_mm suffix and (N) copy suffixes, then append current time
-            const base = filename.replace(/\(\d+\)$/, '').replace(/__\d{2}_\d{2}$/, '').trimEnd();
+            // Strip existing __HH_mm_ss suffix and (N) copy suffixes, then append current time
+            const base = filename.replace(/\(\d+\)$/, '').replace(/__\d{2}_\d{2}(_\d{2})?$/, '').trimEnd();
             const now = new Date();
             const hh = String(now.getHours()).padStart(2, '0');
             const mm = String(now.getMinutes()).padStart(2, '0');
-            return `${base}__${hh}_${mm}.note`;
+            const ss = String(now.getSeconds()).padStart(2, '0');
+            return `${base}__${hh}_${mm}_${ss}.note`;
         }
         let page = 0;
         let originalFileSize = 0;

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'boox-optimizer-v37';
+const CACHE_NAME = 'boox-optimizer-v38';
 
 const APP_SHELL = [
   './',
