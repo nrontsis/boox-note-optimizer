@@ -212,7 +212,7 @@
                                 <input type="checkbox" id="chkAutoOpen" class="w-4 h-4 accent-black cursor-pointer rounded">
                                 <span class="text-xs md:text-sm font-bold text-gray-900">Auto-open after optimization</span>
                             </label>
-                            <p class="text-[10px] md:text-[11px] text-gray-500 mt-1.5 ml-7">Automatically open the optimized file in Boox Notes after processing. Only works in the Android app.</p>
+                            <p class="text-[10px] md:text-[11px] text-gray-500 mt-1.5 ml-7">Automatically open the optimized file in Boox Notes after processing. Android app only. Disabled for the demo file.</p>
                         </div>
                     </div>
                 </details>
@@ -1131,7 +1131,7 @@
                     }
                     ui.btnLoadPreview.disabled = false;
 
-                    if (ui.chkAutoOpen.checked && window.Android) {
+                    if (ui.chkAutoOpen.checked && window.Android && fileSource && fileSource.type !== 'demo') {
                         shareOptimizedFile();
                     } else if (previewEnabled) {
                         ui.btnOptPdf.disabled = false;
