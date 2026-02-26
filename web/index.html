@@ -524,10 +524,16 @@
         let tokenClient;
         let oauthToken = loadToken();
 
+        // Google OAuth does not work inside Android WebView
+        if (window.Android) {
+            if (ui.btnDrive) ui.btnDrive.style.display = 'none';
+            document.getElementById('btnDemo').classList.remove('sm:w-1/2');
+        }
+
         if (ui.btnDrive) {
             ui.btnDrive.onclick = (e) => {
                 e.preventDefault();
-                
+
                 if (GOOGLE_CLIENT_ID.includes('YOUR_') || GOOGLE_API_KEY.includes('YOUR_')) {
                     return alert("Developer Setup Required: Please configure your Google Client ID and API Key in the source code.");
                 }
