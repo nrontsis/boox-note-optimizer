@@ -20,6 +20,9 @@ import androidx.core.content.IntentCompat;
 
 import java.io.*;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "NoteOptimizer";
@@ -30,6 +33,16 @@ public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private ValueCallback<Uri[]> fileUploadCallback;
+
+    private final ActivityResultLauncher<Intent> fileChooserLauncher =
+        registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+            if (fileUploadCallback != null) {
+                fileUploadCallback.onReceiveValue(
+                    WebChromeClient.FileChooserParams.parseResult(result.getResultCode(), result.getData()));
+                fileUploadCallback = null;
+            }
+        });
 
     private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/Note Optimizer";
 
@@ -108,6 +121,22 @@ public class MainActivity extends AppCompatActivity {
         s.setAllowFileAccess(true);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
         webView.addJavascriptInterface(new AndroidBridge(), "Android");
+
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
+                                             FileChooserParams params) {
+                if (fileUploadCallback != null) fileUploadCallback.onReceiveValue(null);
+                fileUploadCallback = callback;
+                try {
+                    fileChooserLauncher.launch(params.createIntent());
+                } catch (Exception e) {
+                    fileUploadCallback = null;
+                    return false;
+                }
+                return true;
+            }
+        });
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
