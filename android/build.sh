@@ -7,7 +7,7 @@ cd "$SCRIPT_DIR"
 KEYSTORE="${1:-keystore.jks}"
 KEYSTORE_PASSWORD="${KEYSTORE_PASSWORD:-noteoptimizer}"
 
-echo "==> Building Docker image..."
+echo "==> Building Docker image (layer cache)..."
 docker build -t note-optimizer-builder "$SCRIPT_DIR"
 
 # ── Generate keystore if it doesn't exist (inside Docker so keytool isn't needed locally) ──
@@ -32,15 +32,16 @@ echo "==> Building Android APK..."
 docker run --rm \
     -v "$SCRIPT_DIR":/project \
     -v "$KEYSTORE_ABS":/keystore.jks:ro \
+    -v note-optimizer-gradle-cache:/root/.gradle \
     -e KEYSTORE_PATH=/keystore.jks \
     -e KEYSTORE_PASSWORD="$KEYSTORE_PASSWORD" \
     note-optimizer-builder \
     bash -c "
         chmod +x gradlew 2>/dev/null || true
         if [ ! -f gradlew ]; then
-            gradle wrapper --gradle-version 8.11.1 --no-daemon
+            gradle wrapper --gradle-version 8.11.1
         fi
-        ./gradlew assembleRelease --no-daemon
+        ./gradlew assembleRelease
         cp app/build/outputs/apk/release/app-release.apk /project/NoteOptimizer.apk
         rm -rf app/build/outputs/apk
     "

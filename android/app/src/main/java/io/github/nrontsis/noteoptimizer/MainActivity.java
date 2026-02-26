@@ -2,9 +2,12 @@ package io.github.nrontsis.noteoptimizer;
 
 import android.content.ContentValues;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.MediaStore;
 import android.util.Base64;
 import android.util.Log;
@@ -13,7 +16,6 @@ import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.content.FileProvider;
 import androidx.core.content.IntentCompat;
 
 import java.io.*;
@@ -22,80 +24,69 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "NoteOptimizer";
     private static final String APP_URL = "https://nrontsis.github.io/boox-note-optimizer";
-    private static final String PROVIDER = "io.github.nrontsis.noteoptimizer.fileprovider";
     private static final String BOOX_NOTES = "com.onyx.android.note";
+    private static final String PREFS = "exports";
+    private static final String PREF_LAST_URI = "last_export_uri";
 
     private WebView webView;
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
     private static final String EXPORT_FOLDER = Environment.DIRECTORY_DOWNLOADS + "/Note Optimizer";
 
-    /** Write file to Downloads/Note Optimizer via MediaStore. Cleans folder first. */
+    /** Write file to Downloads/Note Optimizer via MediaStore. Deletes previous export first. */
     private Uri writeToDownloads(byte[] data, String fileName) throws IOException {
-        // Clean all previous exports in our subfolder
-        try {
-            getContentResolver().delete(
-                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                MediaStore.Downloads.RELATIVE_PATH + " IN (?,?)",
-                new String[]{EXPORT_FOLDER + "/", EXPORT_FOLDER});
-        } catch (Exception ignored) {}
+        // Delete previous export by its exact URI
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        String lastUri = prefs.getString(PREF_LAST_URI, null);
+        if (lastUri != null) {
+            try { getContentResolver().delete(Uri.parse(lastUri), null, null); }
+            catch (Exception ignored) {}
+        }
 
         ContentValues cv = new ContentValues();
         cv.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
         cv.put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream");
         cv.put(MediaStore.Downloads.RELATIVE_PATH, EXPORT_FOLDER);
-        cv.put(MediaStore.Downloads.IS_PENDING, 1);
         Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
         if (uri == null) throw new IOException("Failed to create Downloads entry");
         try (OutputStream os = getContentResolver().openOutputStream(uri)) {
             if (os == null) throw new IOException("Failed to open output stream");
             os.write(data);
         }
-        // Mark as complete so other apps can read it
-        ContentValues done = new ContentValues();
-        done.put(MediaStore.Downloads.IS_PENDING, 0);
-        getContentResolver().update(uri, done, null, null);
+
+        prefs.edit().putString(PREF_LAST_URI, uri.toString()).apply();
         return uri;
     }
 
-    /** Try to open a file in Boox Notes via MediaStore URI, then chooser. */
+    /** Open a file in Boox Notes, with a single retry to work around MediaStore lag. */
     private void openInBooxNotes(Uri uri) {
-        String[] actions = {Intent.ACTION_VIEW, Intent.ACTION_SEND};
-        String[] mimes = {"application/zip", "application/x-zip-compressed",
-            "application/octet-stream", "*/*"};
+        Intent intent = new Intent(Intent.ACTION_VIEW);
+        intent.setDataAndType(uri, "*/*");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.setPackage(BOOX_NOTES);
 
-        for (String action : actions) {
-            for (String mime : mimes) {
-                Intent intent = new Intent(action);
-                if (Intent.ACTION_VIEW.equals(action)) {
-                    intent.setDataAndType(uri, mime);
-                } else {
-                    intent.setType(mime);
-                    intent.putExtra(Intent.EXTRA_STREAM, uri);
-                }
-                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                intent.setPackage(BOOX_NOTES);
-                try {
-                    startActivity(intent);
-                    return;
-                } catch (Exception ignored) {}
-            }
+        try {
+            startActivity(intent);
+            handler.postDelayed(() -> {
+                try { startActivity(intent); }
+                catch (Exception ignored) {}
+            }, 1500);
+        } catch (Exception e) {
+            Intent fallback = new Intent(Intent.ACTION_VIEW);
+            fallback.setDataAndType(uri, "*/*");
+            fallback.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(fallback, "Open with"));
         }
-
-        // Fallback: chooser
-        Intent fallback = new Intent(Intent.ACTION_VIEW);
-        fallback.setDataAndType(uri, "application/octet-stream");
-        fallback.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        startActivity(Intent.createChooser(fallback, "Open with"));
     }
 
-    /* ── JS bridge: receives base64 file data from the web page ── */
+    /* ── JS bridge ── */
     private class AndroidBridge {
         @JavascriptInterface
         public void receiveFile(String base64, String fileName) {
             try {
                 byte[] data = Base64.decode(base64, Base64.DEFAULT);
                 Uri uri = writeToDownloads(data, fileName);
-                openInBooxNotes(uri);
+                runOnUiThread(() -> openInBooxNotes(uri));
             } catch (Exception e) {
                 Log.e(TAG, "receiveFile failed", e);
                 runOnUiThread(() ->
@@ -125,7 +116,6 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        /* ── Intercept blob: downloads → fetch via JS → pass to native ── */
         webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
             if (url.startsWith("blob:")) {
                 String fetchJs =
@@ -149,7 +139,7 @@ public class MainActivity extends AppCompatActivity {
         webView.loadUrl(APP_URL);
     }
 
-    /* ── Inbound share: .note file → inject into web app cache ── */
+    /* ── Inbound share ── */
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
@@ -162,7 +152,6 @@ public class MainActivity extends AppCompatActivity {
         Uri uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri.class);
         if (uri == null) return;
 
-        // Clear the intent so we don't re-process it on page reload
         setIntent(new Intent(Intent.ACTION_MAIN));
 
         try {
@@ -177,7 +166,6 @@ public class MainActivity extends AppCompatActivity {
             String base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
             String name = getFileName(uri);
 
-            // Stash file on window; web app picks it up once WASM is ready
             String js =
                 "(function() {" +
                 "  const b64 = '" + base64 + "';" +
