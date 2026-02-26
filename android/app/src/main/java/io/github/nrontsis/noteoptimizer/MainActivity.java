@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Base64;
+import android.util.Log;
 import android.webkit.*;
 import android.widget.Toast;
 
@@ -16,10 +17,65 @@ import java.io.*;
 
 public class MainActivity extends AppCompatActivity {
 
+    private static final String TAG = "NoteOptimizer";
     private static final String APP_URL = "https://nrontsis.github.io/boox-note-optimizer";
     private static final String PROVIDER = "io.github.nrontsis.noteoptimizer.fileprovider";
+    private static final String BOOX_NOTES = "com.onyx.android.note";
 
     private WebView webView;
+
+    /** Clean up temp export directory, write file, return its File. */
+    private File writeToTempDir(byte[] data, String fileName) throws IOException {
+        File dir = new File(getCacheDir(), "export");
+        // Clean previous exports
+        if (dir.exists()) {
+            File[] old = dir.listFiles();
+            if (old != null) for (File f : old) f.delete();
+        } else {
+            dir.mkdirs();
+        }
+        File out = new File(dir, fileName);
+        try (FileOutputStream fos = new FileOutputStream(out)) {
+            fos.write(data);
+        }
+        return out;
+    }
+
+    /** Try to open a file in Boox Notes, trying multiple actions and MIME types. */
+    private void openInBooxNotes(Uri uri) {
+        String[] actions = {Intent.ACTION_VIEW, Intent.ACTION_SEND};
+        String[] mimes = {"application/zip", "application/x-zip-compressed",
+            "application/octet-stream", "*/*"};
+
+        for (String action : actions) {
+            for (String mime : mimes) {
+                Intent intent = new Intent(action);
+                if (Intent.ACTION_VIEW.equals(action)) {
+                    intent.setDataAndType(uri, mime);
+                } else {
+                    intent.setType(mime);
+                    intent.putExtra(Intent.EXTRA_STREAM, uri);
+                }
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                intent.setPackage(BOOX_NOTES);
+                try {
+                    startActivity(intent);
+                    String msg = "Opened via " + action.replace("android.intent.action.", "") + " [" + mime + "]";
+                    Log.i(TAG, msg);
+                    runOnUiThread(() -> Toast.makeText(this, msg, Toast.LENGTH_SHORT).show());
+                    return;
+                } catch (Exception ignored) {}
+            }
+        }
+
+        // Fallback: chooser
+        Log.w(TAG, "Boox Notes didn't handle any intent, showing chooser");
+        runOnUiThread(() -> Toast.makeText(this, "Boox Notes unavailable, showing chooser", Toast.LENGTH_SHORT).show());
+        Intent fallback = new Intent(Intent.ACTION_VIEW);
+        fallback.setDataAndType(uri, "application/octet-stream");
+        fallback.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(Intent.createChooser(fallback, "Open optimized file with"));
+    }
 
     /* ── JS bridge: receives base64 file data from the web page ── */
     private class AndroidBridge {
@@ -27,21 +83,13 @@ public class MainActivity extends AppCompatActivity {
         public void receiveFile(String base64, String fileName) {
             try {
                 byte[] data = Base64.decode(base64, Base64.DEFAULT);
-                File dir = new File(getCacheDir(), "shared");
-                dir.mkdirs();
-                File out = new File(dir, fileName);
-                try (FileOutputStream fos = new FileOutputStream(out)) {
-                    fos.write(data);
-                }
+                File out = writeToTempDir(data, fileName);
                 Uri uri = FileProvider.getUriForFile(MainActivity.this, PROVIDER, out);
-                Intent share = new Intent(Intent.ACTION_SEND);
-                share.setType("application/octet-stream");
-                share.putExtra(Intent.EXTRA_STREAM, uri);
-                share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                startActivity(Intent.createChooser(share, "Share optimized file"));
+                openInBooxNotes(uri);
             } catch (Exception e) {
+                Log.e(TAG, "receiveFile failed", e);
                 runOnUiThread(() ->
-                    Toast.makeText(MainActivity.this, "Share failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                    Toast.makeText(MainActivity.this, "Open failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
             }
         }
     }
@@ -63,7 +111,6 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
-                // If launched with a shared file, inject it into the page
                 handleInboundShare(getIntent());
             }
         });
@@ -71,7 +118,6 @@ public class MainActivity extends AppCompatActivity {
         /* ── Intercept blob: downloads → fetch via JS → pass to native ── */
         webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
             if (url.startsWith("blob:")) {
-                // Inject JS to fetch the blob, convert to base64, call native bridge
                 String fetchJs =
                     "(async function() {" +
                     "  try {" +
@@ -80,7 +126,7 @@ public class MainActivity extends AppCompatActivity {
                     "    const reader = new FileReader();" +
                     "    reader.onloadend = function() {" +
                     "      const base64 = reader.result.split(',')[1];" +
-                    "      Android.receiveFile(base64, " + jsString(guessFileName(contentDisposition, url)) + ");" +
+                    "      Android.receiveFile(base64, " + jsString(guessFileName(contentDisposition)) + ");" +
                     "    };" +
                     "    reader.readAsDataURL(b);" +
                     "  } catch(e) { console.error('blob fetch failed', e); }" +
@@ -121,7 +167,6 @@ public class MainActivity extends AppCompatActivity {
             String base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
             String name = getFileName(uri);
 
-            // Stash the file into the share-target cache (same format as service worker)
             String js =
                 "(async function() {" +
                 "  try {" +
@@ -147,8 +192,7 @@ public class MainActivity extends AppCompatActivity {
         return (path != null && path.endsWith(".note")) ? path : "shared.note";
     }
 
-    private static String guessFileName(String contentDisposition, String url) {
-        // Try Content-Disposition header first
+    private static String guessFileName(String contentDisposition) {
         if (contentDisposition != null) {
             String[] parts = contentDisposition.split("filename=");
             if (parts.length > 1) {

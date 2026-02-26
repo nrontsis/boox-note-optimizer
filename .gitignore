@@ -3,3 +3,5 @@
 *.wasm*
 CLAUDE.md
 localdata
+*.png
+*.note

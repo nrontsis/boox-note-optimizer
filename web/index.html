@@ -151,7 +151,7 @@
             <div class="p-4 md:p-5 border-b border-gray-100 flex flex-col gap-4 md:gap-5 shrink-0">
                 <div id="actionRowNote" class="flex gap-2 w-full">
                     <button id="btnShareNote" class="hidden flex-1 py-3 md:py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm md:text-[15px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed tracking-wide">
-                        Share Optimized .note
+                        Open Optimized .note
                     </button>
                     <button id="btnDlNote" class="flex-1 py-3 md:py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm md:text-[15px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed tracking-wide">
                         Download Optimized .note
@@ -288,7 +288,7 @@
                     <div class="flex flex-col w-full gap-3">
                         <div id="actionRowDirect" class="flex gap-2 w-full">
                             <button id="btnShareDirect" class="hidden flex-1 py-3.5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition shadow-sm text-sm disabled:opacity-50 disabled:cursor-not-allowed">
-                                Share Optimized .note
+                                Open Optimized .note
                             </button>
                             <button id="btnDlDirect" class="flex-1 py-3.5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition shadow-sm text-sm disabled:opacity-50 disabled:cursor-not-allowed">
                                 Download Optimized .note
@@ -386,6 +386,14 @@
 
         let app = null;
         let filename = "document";
+        function exportName() {
+            // Strip any existing __HH_mm suffix, then append current time
+            const base = filename.replace(/__\d{2}_\d{2}$/, '');
+            const now = new Date();
+            const hh = String(now.getHours()).padStart(2, '0');
+            const mm = String(now.getMinutes()).padStart(2, '0');
+            return `${base}__${hh}_${mm}.note`;
+        }
         let page = 0;
         let originalFileSize = 0;
         let optimizedBlob = null;
@@ -670,7 +678,7 @@
         ui.btnReportIssue.href = `https://github.com/nrontsis/boox-note-optimizer/issues/new?title=${encodeURIComponent('.note file issue: [brief description]')}&body=${encodeURIComponent(issueTemplate)}`;
 
         // --- File State Handlers ---
-        const dlHandler = () => { if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`); };
+        const dlHandler = () => { if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), exportName()); };
         ui.btnDlDirect.onclick = dlHandler;
         ui.btnDlDirectIcon.onclick = dlHandler;
 
@@ -678,16 +686,16 @@
             if (!optimizedBlob) return;
             // In WebView APK: downloadUrl triggers DownloadListener → native share
             if (window.Android) {
-                downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`);
+                downloadUrl(URL.createObjectURL(optimizedBlob), exportName());
                 return;
             }
             // Try Web Share API, fall back to download
             try {
-                const file = new File([optimizedBlob], `${filename}_optimized.note`, { type: 'application/octet-stream' });
+                const file = new File([optimizedBlob], exportName(), { type: 'application/octet-stream' });
                 await navigator.share({ files: [file] });
             } catch(e) {
                 if (e.name !== 'AbortError') {
-                    downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`);
+                    downloadUrl(URL.createObjectURL(optimizedBlob), exportName());
                 }
             }
         }
@@ -1090,8 +1098,8 @@
 
                     [ui.btnShareNote, ui.btnDlNote, ui.btnDlNoteIcon, ui.btnShareDirect, ui.btnDlDirect, ui.btnDlDirectIcon].forEach(b => b.disabled = false);
                     if (canShare) {
-                        ui.btnShareNote.innerText = "Share Optimized .note";
-                        ui.btnShareDirect.innerText = "Share Optimized .note";
+                        ui.btnShareNote.innerText = "Open Optimized .note";
+                        ui.btnShareDirect.innerText = "Open Optimized .note";
                     } else {
                         ui.btnDlNote.innerText = "Download Optimized .note";
                         ui.btnDlDirect.innerText = "Download Optimized .note";
@@ -1122,8 +1130,8 @@
         document.getElementById('btnPrev').onclick = () => { if(page > 0) { page--; ui.pageText.innerText = `Pg ${page + 1}/${app.get_page_count()}`; renderCanvases(); } };
         document.getElementById('btnNext').onclick = () => { if(app && page < app.get_page_count()-1) { page++; ui.pageText.innerText = `Pg ${page + 1}/${app.get_page_count()}`; renderCanvases(); } };
 
-        ui.btnDlNote.onclick = () => { if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`); };
-        ui.btnDlNoteIcon.onclick = () => { if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), `${filename}_optimized.note`); };
+        ui.btnDlNote.onclick = () => { if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), exportName()); };
+        ui.btnDlNoteIcon.onclick = () => { if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), exportName()); };
 
         ui.btnOptPdf.onclick = async () => {
             if(!app || !previewEnabled) return;
@@ -1144,7 +1152,7 @@
                 }
                 pdf.addImage(imgData, 'JPEG', 0, 0, w, h);
             }
-            if (pdf) pdf.save(`${filename}_optimized.pdf`);
+            if (pdf) pdf.save(exportName().replace('.note', '.pdf'));
         };
 
         })().catch(function(err) {
