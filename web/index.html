@@ -1206,8 +1206,8 @@
         // --- EXPORT TO SVG LOGIC ---
         ui.btnOptSvg.onclick = async () => {
             if(!app || !previewEnabled) return;
-            const ogText = ui.btnOptSvg.innerText;
-            ui.btnOptSvg.innerText = "Generating SVG...";
+            const ogHTML = ui.btnOptSvg.innerHTML;
+            ui.btnOptSvg.innerHTML = "Generating SVG...";
             ui.btnOptSvg.disabled = true;
 
             // Yield thread briefly to let the browser update the button text
@@ -1433,7 +1433,7 @@
                 console.error(e);
                 alert("SVG Export failed.");
             } finally {
-                ui.btnOptSvg.innerText = ogText;
+                ui.btnOptSvg.innerHTML = ogHTML;
                 ui.btnOptSvg.disabled = false;
             }
         };
