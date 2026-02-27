@@ -1225,6 +1225,7 @@
                         this.path = "";
                         this.state = {};
                         this.stack = [];
+                        this.pendingImages = [];
                     }
                     
                     _parseColor(color) {
@@ -1315,7 +1316,9 @@
                     setLineDash(d) { this.state.lineDash = d ? Array.from(d) : []; }
                     
                     drawImage(img, x, y, w, h) {
-                        this.elements.push(`<image href="${img.src}" x="${x}" y="${y}" width="${w}" height="${h}" opacity="${this.state.globalAlpha}" transform="matrix(${this.state.transform.join(' ')})" preserveAspectRatio="none" />`);
+                        const placeholder = `__IMG_${this.pendingImages.length}__`;
+                        this.pendingImages.push({ src: img.src, naturalWidth: img.naturalWidth || img.width, naturalHeight: img.naturalHeight || img.height });
+                        this.elements.push(`<image href="${placeholder}" x="${x}" y="${y}" width="${w}" height="${h}" opacity="${this.state.globalAlpha}" transform="matrix(${this.state.transform.join(' ')})" preserveAspectRatio="none" />`);
                     }
                     
                     createPattern(canvas, rep) {
@@ -1324,8 +1327,37 @@
                         return { __svgId: id };
                     }
                     
-                    getSVG() {
-                        return `<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${this.w}" height="${this.h}" viewBox="0 0 ${this.w} ${this.h}">\n<defs>\n${this.defs.join('\n')}\n</defs>\n${this.elements.join('\n')}\n</svg>`;
+                    async getSVG() {
+                        let body = this.elements.join('\n');
+                        for (let i = 0; i < this.pendingImages.length; i++) {
+                            const pi = this.pendingImages[i];
+                            let dataUri = pi.src;
+                            if (!dataUri.startsWith('data:')) {
+                                try {
+                                    const resp = await fetch(pi.src);
+                                    const blob = await resp.blob();
+                                    const mime = blob.type || 'image/png';
+                                    if (mime === 'image/svg+xml') {
+                                        const text = await blob.text();
+                                        dataUri = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(text)));
+                                    } else {
+                                        dataUri = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
+                                    }
+                                } catch(e) {
+                                    // Fallback: try canvas rasterization
+                                    try {
+                                        const c = document.createElement('canvas');
+                                        c.width = pi.naturalWidth; c.height = pi.naturalHeight;
+                                        const img = new Image(); img.crossOrigin = 'anonymous'; img.src = pi.src;
+                                        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+                                        c.getContext('2d').drawImage(img, 0, 0);
+                                        dataUri = c.toDataURL('image/png');
+                                    } catch(e2) {}
+                                }
+                            }
+                            body = body.replace(`__IMG_${i}__`, dataUri);
+                        }
+                        return `<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${this.w}" height="${this.h}" viewBox="0 0 ${this.w} ${this.h}">\n<defs>\n${this.defs.join('\n')}\n</defs>\n${body}\n</svg>`;
                     }
                 }
 
@@ -1390,7 +1422,7 @@
                 // Execute WebAssembly render on the active currently-displayed page
                 app.render_page(tmp, true, page);
                 
-                const svgStr = tracker.getSVG();
+                const svgStr = await tracker.getSVG();
                 const blob = new Blob([svgStr], { type: 'image/svg+xml' });
                 
                 const n = app.get_page_count();
