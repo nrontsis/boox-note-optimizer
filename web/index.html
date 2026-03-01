@@ -13,12 +13,10 @@
     
     <script>
         if ('serviceWorker' in navigator) {
-            // nocache=1: clear all caches and re-register SW to force latest version
             if (new URLSearchParams(location.search).get('nocache') === '1') {
                 caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k)))).then(() => {
                     navigator.serviceWorker.getRegistrations().then(regs => {
                         Promise.all(regs.map(r => r.unregister())).then(() => {
-                            // Strip nocache param and reload clean
                             const u = new URL(location.href);
                             u.searchParams.delete('nocache');
                             location.replace(u.toString());
@@ -26,17 +24,7 @@
                     });
                 });
             } else {
-                navigator.serviceWorker.register('sw.js').then(reg => {
-                    reg.addEventListener('updatefound', () => {
-                        const nw = reg.installing;
-                        if (!nw) return;
-                        nw.addEventListener('statechange', () => {
-                            if (nw.state === 'activated' && navigator.serviceWorker.controller) {
-                                location.reload();
-                            }
-                        });
-                    });
-                });
+                navigator.serviceWorker.register('sw.js');
             }
         }
     </script>

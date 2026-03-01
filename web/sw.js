@@ -13,7 +13,11 @@ const APP_SHELL = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.all(APP_SHELL.map((url) =>
+        fetch(url, { cache: 'reload' }).then((resp) => cache.put(url, resp))
+      ))
+    )
   );
   self.skipWaiting();
 });
@@ -51,12 +55,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // nocache=1 in URL: bypass all caches and fetch from network
-  if (url.searchParams.get('nocache') === '1') {
-    event.respondWith(fetch(event.request, { cache: 'no-store' }));
-    return;
-  }
-
   // Skip demo.note — large and not essential for offline
   if (url.pathname.endsWith('demo.note')) return;
 
@@ -74,8 +72,14 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Local assets: cache-first, fall back to network
+  // Local assets: network-first, fall back to cache (ensures fresh deploys)
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request)
+      .then((response) => {
+        const clone = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
