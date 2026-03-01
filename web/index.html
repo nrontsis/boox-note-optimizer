@@ -993,11 +993,12 @@
         async function handleSvgImport(file) {
             const text = await file.text();
 
-            // Use empty.note as a blank template for SVG import
+            // Always start from a fresh empty.note template for SVG import
             const res = await fetch('empty.note');
             const ab = await res.arrayBuffer();
             fileSource = { type: 'demo' };
             await loadBuffer(new Uint8Array(ab));
+            if (!app) return;
             filename = file.name.replace('.svg', '');
 
             // Show loading indicator and yield so the browser paints it
