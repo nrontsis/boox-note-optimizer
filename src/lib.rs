@@ -3164,11 +3164,14 @@ impl AppEngine {
                 }
             });
 
-            // Simple rewrite: iterate ALL entries, replace point/shape, copy rest verbatim
+            // Simple rewrite: iterate ALL entries, replace point/shape, copy rest verbatim.
+            // Skip stash (undo history) entries — they can be huge and aren't needed.
             let has_svg_import = !self.new_shapes.is_empty();
             for i in 0..arc.len() {
                 let Ok(mut f) = arc.by_index(i) else { continue; };
                 let name = f.name().to_string();
+
+                if name.contains("/stash/") { continue; }
 
                 // Handle directory entries
                 if name.ends_with('/') {
