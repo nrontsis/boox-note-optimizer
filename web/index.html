@@ -481,6 +481,25 @@
         let pdfW = 1860;
         let pdfH = 2480;
 
+        function styledConfirm(message, { confirmText = 'Continue', cancelText = 'Cancel' } = {}) {
+            return new Promise(resolve => {
+                const overlay = document.createElement('div');
+                overlay.className = 'fixed inset-0 z-[9999] flex items-center justify-center bg-black/40';
+                overlay.innerHTML = `
+                    <div class="bg-white rounded-xl shadow-2xl max-w-sm w-[90%] p-6 space-y-4">
+                        <p class="text-sm text-gray-700 whitespace-pre-line">${message.replace(/</g, '&lt;')}</p>
+                        <div class="flex gap-3 justify-end">
+                            <button id="_cc" class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition">${cancelText}</button>
+                            <button id="_co" class="px-4 py-2 text-sm font-medium text-white bg-black hover:bg-gray-800 rounded-lg transition">${confirmText}</button>
+                        </div>
+                    </div>`;
+                document.body.appendChild(overlay);
+                overlay.querySelector('#_co').onclick = () => { overlay.remove(); resolve(true); };
+                overlay.querySelector('#_cc').onclick = () => { overlay.remove(); resolve(false); };
+                overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); resolve(false); } });
+            });
+        }
+
         // --- UI Bindings ---
         const ui = {
             headerBtn: document.getElementById('headerUploadBtn'), fileInpHdr: document.getElementById('headerFileInput'),
@@ -701,7 +720,7 @@
             saveFileSource({ type: 'gdrive', id, name, size: originalFileSize });
 
             if (name.endsWith('.svg')) {
-                if (!confirm("SVG import is experimental with limited support. Shapes, paths, and text are supported.\n\nGradients, filters, clipping, and CSS styling are not supported.\n\nContinue?")) return;
+                if (!await styledConfirm("SVG import is experimental with limited support. Shapes, paths, and text are supported.\n\nGradients, filters, clipping, and CSS styling are not supported.")) return;
                 const file = new File([ab], name, { type: 'image/svg+xml' });
                 await handleSvgImport(file);
             } else {
@@ -818,8 +837,8 @@
                 // First-time share prompt: offer to enable auto-share
                 if (!ui.chkAutoOpen.checked && localStorage.getItem(LS_AUTO_SHARE_PROMPTED) !== 'true') {
                     try { localStorage.setItem(LS_AUTO_SHARE_PROMPTED, 'true'); } catch(e) {}
-                    setTimeout(() => {
-                        if (confirm('Automatically send optimized files back to Boox Notes?\n\nYou can change this in Advanced Settings.')) {
+                    setTimeout(async () => {
+                        if (await styledConfirm('Automatically send optimized files back to Boox Notes?\n\nYou can change this in Advanced Settings.', { confirmText: 'Yes', cancelText: 'No' })) {
                             ui.chkAutoOpen.checked = true;
                             try { localStorage.setItem(LS_AUTO_OPEN, 'true'); } catch(e) {}
                         }
@@ -967,7 +986,6 @@
                     if (!res.ok) throw new Error();
                     const ab = await res.arrayBuffer();
                     filename = file.name.replace('.svg', '');
-                    originalFileSize = ab.byteLength;
                     fileSource = { type: 'demo' };
                     await loadBuffer(new Uint8Array(ab));
                     await new Promise(r => setTimeout(r, 100));
@@ -980,6 +998,10 @@
             } else {
                 filename = file.name.replace('.svg', '');
             }
+
+            // Show loading indicator and yield so the browser paints it
+            ui.optResults.innerHTML = '<span class="animate-pulse text-blue-600 font-semibold">Importing SVG...</span>';
+            await new Promise(r => setTimeout(r, 0));
 
             const div = document.createElement('div');
             div.innerHTML = text.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
@@ -1359,9 +1381,7 @@
             try {
                 app.clear_strokes(page);
                 app.add_svg_strokes(page, JSON.stringify(strokes));
-
-                // Set originalFileSize to the .note size with SVG data before optimization
-                try { originalFileSize = app.export().length; } catch(e) {}
+                originalFileSize = app.export().length;
 
                 ui.optResults.innerHTML = `<span class="text-green-600 font-bold">Successfully imported ${strokes.length} vector paths!</span>`;
 
@@ -1376,11 +1396,23 @@
         // Resets app state between calls so each SVG is tested in isolation.
         window._testImportSVG = async (svgText) => {
             if (app) { try { app.free(); } catch(e) {} app = null; }
+            window._lastSvgStrokes = null;
+            const origAdd = AppEngine.prototype.add_svg_strokes;
+            AppEngine.prototype.add_svg_strokes = function(pageIdx, jsonStr) {
+                window._lastSvgStrokes = jsonStr;
+                return origAdd.call(this, pageIdx, jsonStr);
+            };
             const file = new File([svgText], 'test.svg', { type: 'image/svg+xml' });
             await handleSvgImport(file);
+            AppEngine.prototype.add_svg_strokes = origAdd;
             const c = ui.cOrig;
             app.render_page(c, false, page);
             return { url: c.toDataURL('image/png'), width: c.width, height: c.height };
+        };
+        window._testExportNote = () => {
+            if (!app) return null;
+            const exported = app.export();
+            return btoa(String.fromCharCode(...exported));
         };
 
         const loadFile = async (file) => {
@@ -1392,7 +1424,7 @@
             saveFileSource({ type: 'local', name: file.name });
 
             if (file.name.endsWith('.svg') || file.type === 'image/svg+xml') {
-                if (!confirm("SVG import is experimental with limited support. Shapes, paths, and text are supported.\n\nGradients, filters, clipping, and CSS styling are not supported.\n\nContinue?")) return;
+                if (!await styledConfirm("SVG import is experimental with limited support. Shapes, paths, and text are supported.\n\nGradients, filters, clipping, and CSS styling are not supported.")) return;
                 await handleSvgImport(file);
                 return;
             }
@@ -2088,7 +2120,7 @@
             const svg = await generateSVG();
             await navigator.clipboard.writeText(svg);
 
-            if (!confirm("This will open a drawing editor in a new tab where you can edit your notes.\n\nOnce it opens, click File \u2192 New From Clipboard to load your drawing.\n\nContinue?")) return;
+            if (!await styledConfirm("This will open a drawing editor in a new tab where you can edit your notes.\n\nOnce it opens, click File \u2192 New From Clipboard to load your drawing.")) return;
 
             window.open('https://boxy-svg.com/app', '_blank');
         };

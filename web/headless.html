@@ -101,5 +101,16 @@ window.getPageCount = (b64) => {
     app.free();
     return n;
 };
+window.testSvgExport = (emptyB64, svgStrokesJson) => {
+    const binary = atob(emptyB64);
+    const u8 = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) u8[i] = binary.charCodeAt(i);
+    const app = new AppEngine(u8);
+    app.add_svg_strokes(0, svgStrokesJson);
+    const exported = app.export();
+    const b64out = btoa(String.fromCharCode(...exported));
+    app.free();
+    return b64out;
+};
 window.ready = true;
 </script></body></html>

@@ -257,7 +257,27 @@ impl NoteFile {
         // Ensure notes has at least one entry per page (empty pages need placeholders)
         while notes.len() < pages.len() {
             let pid = &pages[notes.len()];
-            notes.push(Note { path: format!("point/{}/0#points", pid), header: Vec::new(), strokes: Vec::new() });
+            // Build a 76-byte header: 4-byte count (BE u32) + 36-byte page UUID + 36-byte stub UUID
+            let mut hdr = Vec::with_capacity(76);
+            hdr.extend_from_slice(&1u32.to_be_bytes());
+            let mut pid_bytes = pid.as_bytes().to_vec();
+            pid_bytes.resize(36, b' ');
+            hdr.extend_from_slice(&pid_bytes);
+            let rand_uuid = {
+                let mut bytes = [0u8; 16];
+                for b in bytes.iter_mut() {
+                    *b = (js_sys::Math::random() * 256.0) as u8;
+                }
+                bytes[6] = (bytes[6] & 0x0F) | 0x40; // version 4
+                bytes[8] = (bytes[8] & 0x3F) | 0x80; // variant 1
+                format!("{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                    bytes[0], bytes[1], bytes[2], bytes[3],
+                    bytes[4], bytes[5], bytes[6], bytes[7],
+                    bytes[8], bytes[9], bytes[10], bytes[11],
+                    bytes[12], bytes[13], bytes[14], bytes[15])
+            };
+            hdr.extend_from_slice(rand_uuid.as_bytes());
+            notes.push(Note { path: format!("point/{}/0#points", pid), header: hdr, strokes: Vec::new() });
         }
 
         Ok(NoteFile {
@@ -837,7 +857,8 @@ pub fn build_points(nd: &Note) -> Vec<u8> {
     let mut idxs = Vec::new();
     let mut c_off = nd.header.len() as u32;
     for s in &nd.strokes {
-        let mut b = vec![0, 0, 0, 0];
+        let mut b = Vec::new();
+        b.write_u32::<BigEndian>(s.points.len() as u32).unwrap();
         for p in &s.points {
             b.write_f32::<BigEndian>(p.x).unwrap();
             b.write_f32::<BigEndian>(p.y).unwrap();
@@ -867,84 +888,431 @@ pub fn build_points(nd: &Note) -> Vec<u8> {
     res
 }
 
+/// Convert RGBA color to signed i32 ARGB (as used in GeoJSON fillAttr/strokeAttr).
+fn rgba_to_signed_argb(c: &(u8, u8, u8, f32)) -> i32 {
+    let argb = ((c.3 * 255.0) as u32) << 24 | (c.0 as u32) << 16 | (c.1 as u32) << 8 | (c.2 as u32);
+    argb as i32
+}
+
+/// Build the fillPath object used in gold-format GeoJSON.
+fn fill_path_json(gen_id: i64) -> serde_json::Value {
+    serde_json::json!({
+        "convex": true, "empty": false, "fillType": "WINDING",
+        "generationId": gen_id, "inverseFillType": false,
+        "mNativePath": 0, "pathIterator": {}
+    })
+}
+
+/// Build pen_type=40 GeoJSON for a filled shape.
+/// All shapes (rect, oval, polygon) go through this.
+/// Uses 200x200 local coordinate space with matrix transform, matching gold files.
+fn build_pt40_geojson(
+    coords: serde_json::Value,  // Already-formatted coordinates (format differs per geom_type)
+    fill_color: &(u8, u8, u8, f32),
+    stroke_color: &(u8, u8, u8, f32),
+    stroke_width_local: f32,
+    geom_type: &str,      // "Polygon" or "MultiPoint"
+    sub_type: &str,        // "" for polygon, "Oval" for oval
+    universal_type: &str,  // "rectangle", "triangle", "" etc.
+) -> String {
+    let fill_argb = rgba_to_signed_argb(fill_color);
+    let stroke_argb = rgba_to_signed_argb(stroke_color);
+    let has_fill = fill_color.3 > 0.0;
+
+    let feature = serde_json::json!({
+        "displayFillColor": fill_argb,
+        "fillPath": fill_path_json(1),
+        "fromShapeType": -1,
+        "geometry": {
+            "coordinates": coords,
+            "fillPath": fill_path_json(2),
+            "fromShapeType": -1,
+            "type": geom_type
+        },
+        "properties": {
+            "fillAttr": { "color": fill_argb, "enableColor": has_fill },
+            "radius": 0.0,
+            "selectionPointType": "SCALE",
+            "strokeAttr": {
+                "color": stroke_argb, "colorTransformMode": 0,
+                "enableColor": true, "roundCorner": true,
+                "width": stroke_width_local
+            },
+            "subType": sub_type,
+            "underContent": false,
+            "useFixedRatio": false
+        },
+        "type": "Feature",
+        "universalShapeType": "",
+        "version": 1
+    });
+
+    let fc = serde_json::json!({
+        "type": "FeatureCollection",
+        "features": [feature],
+        "fillPath": fill_path_json(3),
+        "fromShapeType": -1,
+        "properties": {
+            "radius": 0.0, "selectionPointType": "SCALE",
+            "subType": sub_type, "underContent": false, "useFixedRatio": false
+        },
+        "universalShapeType": universal_type,
+        "version": 2
+    });
+
+    let fc_str = serde_json::to_string(&fc).unwrap();
+    let outer = serde_json::json!({ "featureCollection": fc_str });
+    serde_json::to_string(&outer).unwrap()
+}
+
+/// Build pen_type=40 GeoJSON for a filled ellipse (from SVG pen_type 0).
+/// Points: 2 bounding box corners in page space.
+fn build_oval_geojson(points: &[Point], fill_color: &(u8, u8, u8, f32), stroke_color: &(u8, u8, u8, f32), thickness: f32) -> (String, [f32; 6]) {
+    let (x0, y0) = (points[0].x.min(points[1].x), points[0].y.min(points[1].y));
+    let (x1, y1) = (points[0].x.max(points[1].x), points[0].y.max(points[1].y));
+    let w = x1 - x0;
+    let h = y1 - y0;
+    let sx = w / 200.0;
+    let sy = h / 200.0;
+    let matrix = [sx, 0.0, x0, 0.0, sy, y0];
+    // Oval: MultiPoint with flat point pairs (NOT edge pairs like Polygon)
+    let coords = serde_json::json!([[0.0, 0.0], [200.0, 200.0]]);
+    let extra = build_pt40_geojson(coords, fill_color, stroke_color,
+        thickness / sx.max(sy), "MultiPoint", "Oval", "");
+    (extra, matrix)
+}
+
+/// Build pen_type=40 GeoJSON for a filled polygon (from SVG pen_type 17).
+/// Points: N boundary vertices in page space.
+fn build_polygon_geojson(points: &[Point], fill_color: &(u8, u8, u8, f32), stroke_color: &(u8, u8, u8, f32), thickness: f32) -> (String, [f32; 6]) {
+    // Compute bounding box to create local 200x200 space
+    let min_x = points.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+    let min_y = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+    let max_x = points.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
+    let max_y = points.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+    let w = (max_x - min_x).max(1.0);
+    let h = (max_y - min_y).max(1.0);
+    let sx = w / 200.0;
+    let sy = h / 200.0;
+    let matrix = [sx, 0.0, min_x, 0.0, sy, min_y];
+
+    // Convert points to local 200x200 edge pairs (Polygon format)
+    let n = points.len();
+    let edge_pairs: Vec<serde_json::Value> = (0..n).map(|i| {
+        let j = (i + 1) % n;
+        let lx0 = ((points[i].x - min_x) / sx) as f64;
+        let ly0 = ((points[i].y - min_y) / sy) as f64;
+        let lx1 = ((points[j].x - min_x) / sx) as f64;
+        let ly1 = ((points[j].y - min_y) / sy) as f64;
+        serde_json::json!([[lx0, ly0], [lx1, ly1]])
+    }).collect();
+    let coords = serde_json::Value::Array(edge_pairs);
+
+    let extra = build_pt40_geojson(coords, fill_color, stroke_color,
+        thickness / sx.max(sy), "Polygon", "", "");
+    (extra, matrix)
+}
+
+/// Build pen_type=40 GeoJSON for a filled rectangle (from SVG pen_type 1).
+/// Points: 2 corner points in page space.
+fn build_rect_geojson(points: &[Point], fill_color: &(u8, u8, u8, f32), stroke_color: &(u8, u8, u8, f32), thickness: f32) -> (String, [f32; 6]) {
+    let (x0, y0) = (points[0].x.min(points[1].x), points[0].y.min(points[1].y));
+    let (x1, y1) = (points[0].x.max(points[1].x), points[0].y.max(points[1].y));
+    let w = (x1 - x0).max(1.0);
+    let h = (y1 - y0).max(1.0);
+    let sx = w / 200.0;
+    let sy = h / 200.0;
+    let matrix = [sx, 0.0, x0, 0.0, sy, y0];
+    // Rectangle in local space: 4 edges of 200x200 box (Polygon edge pairs)
+    let coords = serde_json::json!([
+        [[0.0, 0.0], [200.0, 0.0]],
+        [[200.0, 0.0], [200.0, 200.0]],
+        [[200.0, 200.0], [0.0, 200.0]],
+        [[0.0, 200.0], [0.0, 0.0]]
+    ]);
+    let extra = build_pt40_geojson(coords, fill_color, stroke_color,
+        thickness / sx.max(sy), "Polygon", "", "rectangle");
+    (extra, matrix)
+}
+
 fn build_shape_protobuf(
     new_shapes: &[(Stroke, ShapeMeta)],
-    points_doc_uuid: &str,
-    shape_doc_uuid: &str,
+    _points_doc_uuid: &str,
+    _shape_doc_uuid: &str,
 ) -> Vec<u8> {
     let mut result = Vec::new();
-    for (stroke, meta) in new_shapes {
+    for (_stroke, meta) in new_shapes {
         let mut inner = Vec::new();
 
+        // Field 1: shapeUUID
         encode_varint(&mut inner, (1 << 3) | 2);
-        encode_varint(&mut inner, stroke.uuid.len() as u64);
-        inner.extend_from_slice(stroke.uuid.as_bytes());
+        encode_varint(&mut inner, _stroke.uuid.len() as u64);
+        inner.extend_from_slice(_stroke.uuid.as_bytes());
 
+        // Field 2: created timestamp
         encode_varint(&mut inner, (2 << 3) | 0);
         encode_varint(&mut inner, meta.created_ts);
 
-        encode_varint(&mut inner, (3 << 3) | 0);
-        encode_varint(&mut inner, meta.created_ts);
-
+        // Field 4: color ARGB
         encode_varint(&mut inner, (4 << 3) | 0);
-        let c = meta.color_rgba;
-        let color_val = ((c.3 * 255.0) as u32) << 24
-            | (c.0 as u32) << 16
-            | (c.1 as u32) << 8
-            | (c.2 as u32);
+        let color_val = ((meta.color_rgba.3 * 255.0) as u32) << 24
+            | (meta.color_rgba.0 as u32) << 16
+            | (meta.color_rgba.1 as u32) << 8
+            | (meta.color_rgba.2 as u32);
         encode_varint(&mut inner, color_val as u64);
 
+        // Field 5: thickness
         encode_varint(&mut inner, (5 << 3) | 5);
         inner.extend_from_slice(&meta.thickness.to_le_bytes());
 
-        encode_varint(&mut inner, (6 << 3) | 0);
-        encode_varint(&mut inner, meta.zorder);
+        // Field 8: matrix (for pen_type 40 geometric shapes)
+        if let Some(m) = &meta.matrix {
+            if meta.pen_type == 40 {
+                let matrix_json = format!(
+                    r#"{{"values":[{},{},{},{},{},{},0.0,0.0,1.0]}}"#,
+                    m[0], m[1], m[2], m[3], m[4], m[5]
+                );
+                encode_varint(&mut inner, (8 << 3) | 2);
+                encode_varint(&mut inner, matrix_json.len() as u64);
+                inner.extend_from_slice(matrix_json.as_bytes());
+            }
+        }
 
+        // Field 12: pen_type
         encode_varint(&mut inner, (12 << 3) | 0);
         encode_varint(&mut inner, meta.pen_type as u64);
 
-        if !points_doc_uuid.is_empty() {
-            encode_varint(&mut inner, (16 << 3) | 2);
-            encode_varint(&mut inner, points_doc_uuid.len() as u64);
-            inner.extend_from_slice(points_doc_uuid.as_bytes());
+        // Field 20: extra JSON (featureCollection for pen_type 40)
+        if let Some(ref extra) = meta.extra_json {
+            if meta.pen_type == 40 {
+                encode_varint(&mut inner, (20 << 3) | 2);
+                encode_varint(&mut inner, extra.len() as u64);
+                inner.extend_from_slice(extra.as_bytes());
+            }
         }
 
-        if !shape_doc_uuid.is_empty() {
-            encode_varint(&mut inner, (18 << 3) | 2);
-            encode_varint(&mut inner, shape_doc_uuid.len() as u64);
-            inner.extend_from_slice(shape_doc_uuid.as_bytes());
-        }
-
-        // Field 23: fill_color (varint, ARGB)
-        if let Some(fc) = meta.fill_color {
-            encode_varint(&mut inner, (23 << 3) | 0);
+        // Field 23: fillColor ARGB (required for fills to render on device)
+        if let Some(fc) = &meta.fill_color {
             let fc_val = ((fc.3 * 255.0) as u32) << 24
                 | (fc.0 as u32) << 16
                 | (fc.1 as u32) << 8
                 | (fc.2 as u32);
+            encode_varint(&mut inner, (23 << 3) | 0);
             encode_varint(&mut inner, fc_val as u64);
         }
 
-        // Field 25: point_list (length-delimited binary)
-        // Format: 4-byte header + 16 bytes per point (x:f32 BE, y:f32 BE, 8 zero bytes)
-        if !meta.point_list.is_empty() {
-            let pl_len = 4 + meta.point_list.len() * 16;
-            encode_varint(&mut inner, (25 << 3) | 2);
-            encode_varint(&mut inner, pl_len as u64);
-            inner.extend_from_slice(&[0u8; 4]); // header
-            for pt in &meta.point_list {
-                let mut pb = Vec::new();
-                pb.write_f32::<BigEndian>(pt[0]).unwrap();
-                pb.write_f32::<BigEndian>(pt[1]).unwrap();
-                pb.extend_from_slice(&[0u8; 8]); // padding
-                inner.extend_from_slice(&pb);
-            }
-        }
-
+        // Wrap in outer field 1
         encode_varint(&mut result, (1 << 3) | 2);
         encode_varint(&mut result, inner.len() as u64);
         result.extend_from_slice(&inner);
     }
+    result
+}
+
+/// Patch all JSON string fields in a flat protobuf message using a callback.
+/// The callback receives (field_number, parsed_json) and returns modified JSON.
+fn patch_protobuf_json_fields(
+    data: &[u8],
+    patcher: &dyn Fn(u32, &mut serde_json::Value),
+) -> Vec<u8> {
+    let mut off = 0;
+    let mut result = Vec::new();
+    while off < data.len() {
+        let field_start = off;
+        let tag = decode_var(data, &mut off);
+        let fn_num = (tag >> 3) as u32;
+        let wt = (tag & 0x07) as u8;
+        if fn_num == 0 { break; }
+        match wt {
+            2 => {
+                let l = decode_var(data, &mut off) as usize;
+                if off + l > data.len() { break; }
+                let val = &data[off..off + l];
+                off += l;
+                if let Ok(s) = std::str::from_utf8(val) {
+                    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(s) {
+                        patcher(fn_num, &mut v);
+                        let new_json = serde_json::to_string(&v).unwrap_or_else(|_| s.to_string());
+                        let new_bytes = new_json.as_bytes();
+                        encode_varint(&mut result, tag);
+                        encode_varint(&mut result, new_bytes.len() as u64);
+                        result.extend_from_slice(new_bytes);
+                        continue;
+                    }
+                }
+                result.extend_from_slice(&data[field_start..off]);
+            }
+            0 => { decode_var(data, &mut off); result.extend_from_slice(&data[field_start..off]); }
+            1 => { off += 8; result.extend_from_slice(&data[field_start..off]); }
+            5 => { off += 4; result.extend_from_slice(&data[field_start..off]); }
+            _ => { result.extend_from_slice(&data[field_start..]); break; }
+        }
+    }
+    result
+}
+
+/// Patch a page rect JSON object to use new dimensions.
+fn patch_page_rect(rect: &mut serde_json::Value, w: f32, h: f32) {
+    if let Some(obj) = rect.as_object_mut() {
+        obj.insert("right".into(), serde_json::json!(w));
+        obj.insert("bottom".into(), serde_json::json!(h));
+    }
+}
+
+/// Patch virtual/doc/pb: update page size in field 9 JSON.
+fn patch_virtual_doc_bytes(data: &[u8], canvas_w: f32, canvas_h: f32) -> Vec<u8> {
+    patch_protobuf_json_fields(data, &|fn_num, v| {
+        if fn_num == 9 {
+            if let Some(cps) = v.get_mut("contentPageSize") {
+                patch_page_rect(cps, canvas_w, canvas_h);
+            }
+            // Clear template reference
+            v.as_object_mut().map(|o| {
+                o.insert("contentId".into(), serde_json::json!("0"));
+                o.insert("contentRelativePath".into(), serde_json::json!(""));
+            });
+        }
+    })
+}
+
+/// Patch virtual/page/pb: update page rects in sub-fields 6,7,8 and clear template refs 9,10.
+fn patch_virtual_page_bytes(data: &[u8], canvas_w: f32, canvas_h: f32) -> Vec<u8> {
+    // Structure: outer field 1 (message) containing inner sub-fields
+    let mut off = 0;
+    let tag = decode_var(data, &mut off);
+    if (tag >> 3) != 1 || (tag & 7) != 2 { return data.to_vec(); }
+    let inner_len = decode_var(data, &mut off) as usize;
+    if off + inner_len > data.len() { return data.to_vec(); }
+    let inner = &data[off..off + inner_len];
+
+    let patched_inner = patch_protobuf_json_fields(inner, &|fn_num, v| {
+        match fn_num {
+            6 | 7 | 8 => { patch_page_rect(v, canvas_w, canvas_h); }
+            _ => {}
+        }
+    });
+
+    // Also need to patch string fields 9 (template name) and 10 (template path) to empty
+    // Re-parse patched_inner to clear fields 9 and 10
+    let mut off2 = 0;
+    let mut final_inner = Vec::new();
+    while off2 < patched_inner.len() {
+        let field_start = off2;
+        let itag = decode_var(&patched_inner, &mut off2);
+        let ifn = (itag >> 3) as u32;
+        let iwt = (itag & 0x07) as u8;
+        if ifn == 0 { break; }
+        match iwt {
+            2 => {
+                let l = decode_var(&patched_inner, &mut off2) as usize;
+                off2 += l;
+                if ifn == 9 || ifn == 10 {
+                    // Write empty string for template name/path
+                    encode_varint(&mut final_inner, itag);
+                    encode_varint(&mut final_inner, 0);
+                } else {
+                    final_inner.extend_from_slice(&patched_inner[field_start..off2]);
+                }
+            }
+            0 => { decode_var(&patched_inner, &mut off2); final_inner.extend_from_slice(&patched_inner[field_start..off2]); }
+            1 => { off2 += 8; final_inner.extend_from_slice(&patched_inner[field_start..off2]); }
+            5 => { off2 += 4; final_inner.extend_from_slice(&patched_inner[field_start..off2]); }
+            _ => { final_inner.extend_from_slice(&patched_inner[field_start..]); break; }
+        }
+    }
+
+    let mut result = Vec::new();
+    encode_varint(&mut result, (1 << 3) | 2);
+    encode_varint(&mut result, final_inner.len() as u64);
+    result.extend_from_slice(&final_inner);
+    result
+}
+
+/// Patch note_info protobuf to set blank template and correct page dimensions.
+/// Structure: outer field 1 (message) -> inner fields 12 (page config JSON), 13 (background JSON)
+fn patch_note_info_bytes(data: &[u8], canvas_w: f32, canvas_h: f32) -> Vec<u8> {
+    // Parse outer wrapper: field 1, wire type 2 (length-delimited)
+    let mut off = 0;
+    let tag = decode_var(data, &mut off);
+    if (tag >> 3) != 1 || (tag & 7) != 2 { return data.to_vec(); }
+    let inner_len = decode_var(data, &mut off) as usize;
+    if off + inner_len > data.len() { return data.to_vec(); }
+    let inner = &data[off..off + inner_len];
+
+    // Parse inner message field by field, patching fields 12 and 13
+    let mut ioff = 0;
+    let mut patched_inner = Vec::new();
+    while ioff < inner.len() {
+        let field_start = ioff;
+        let itag = decode_var(inner, &mut ioff);
+        let ifn = (itag >> 3) as u32;
+        let iwt = (itag & 0x07) as u8;
+
+        if (ifn == 12 || ifn == 13) && iwt == 2 {
+            let l = decode_var(inner, &mut ioff) as usize;
+            if ioff + l > inner.len() { break; }
+            let json_bytes = &inner[ioff..ioff + l];
+            ioff += l;
+
+            if let Ok(s) = std::str::from_utf8(json_bytes) {
+                if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(s) {
+                    if ifn == 12 {
+                        // Patch defaultPageRect and pageInfoMap dimensions
+                        if let Some(rect) = v.get_mut("defaultPageRect").and_then(|r| r.as_object_mut()) {
+                            rect.insert("right".into(), serde_json::json!(canvas_w as i32));
+                            rect.insert("bottom".into(), serde_json::json!(canvas_h as i32));
+                        }
+                        if let Some(pim) = v.get_mut("pageInfoMap").and_then(|m| m.as_object_mut()) {
+                            for (_pid, pinfo) in pim.iter_mut() {
+                                if let Some(obj) = pinfo.as_object_mut() {
+                                    obj.insert("width".into(), serde_json::json!(canvas_w as i32));
+                                    obj.insert("height".into(), serde_json::json!(canvas_h as i32));
+                                }
+                            }
+                        }
+                    } else {
+                        // Field 13: patch template to blank and update dimensions
+                        if let Some(pbm) = v.get_mut("pageBKGroundMap").and_then(|m| m.as_object_mut()) {
+                            for (_pid, pg) in pbm.iter_mut() {
+                                if let Some(obj) = pg.as_object_mut() {
+                                    obj.insert("resId".into(), serde_json::json!("0"));
+                                    obj.insert("title".into(), serde_json::json!("Blank"));
+                                    obj.insert("type".into(), serde_json::json!(0));
+                                    obj.insert("value".into(), serde_json::json!("0"));
+                                    obj.insert("width".into(), serde_json::json!(canvas_w));
+                                    obj.insert("height".into(), serde_json::json!(canvas_h));
+                                }
+                            }
+                        }
+                    }
+                    let new_json = serde_json::to_string(&v).unwrap_or_else(|_| s.to_string());
+                    let new_bytes = new_json.as_bytes();
+                    encode_varint(&mut patched_inner, itag);
+                    encode_varint(&mut patched_inner, new_bytes.len() as u64);
+                    patched_inner.extend_from_slice(new_bytes);
+                    continue;
+                }
+            }
+            // Fallback: copy original
+            patched_inner.extend_from_slice(&inner[field_start..ioff]);
+        } else {
+            // Copy other fields verbatim
+            match iwt {
+                0 => { decode_var(inner, &mut ioff); }
+                1 => { ioff += 8; }
+                2 => { let l = decode_var(inner, &mut ioff) as usize; ioff += l; }
+                5 => { ioff += 4; }
+                _ => { patched_inner.extend_from_slice(&inner[field_start..]); break; }
+            }
+            patched_inner.extend_from_slice(&inner[field_start..ioff]);
+        }
+    }
+
+    // Re-wrap in outer message
+    let mut result = Vec::new();
+    encode_varint(&mut result, (1 << 3) | 2);
+    encode_varint(&mut result, patched_inner.len() as u64);
+    result.extend_from_slice(&patched_inner);
     result
 }
 
@@ -1110,6 +1478,9 @@ impl AppEngine {
         }
         if let Some(page_id) = self.pages.get(page_idx).cloned() {
             self.new_shapes.remove(&page_id);
+            self.templates.remove(&page_id);
+            self.bg_images.remove(&format!("tmpl_{}", page_id));
+            self.shape_meta.retain(|_, m| m.page_id.as_deref() != Some(&page_id));
         }
     }
 
@@ -1220,22 +1591,28 @@ impl AppEngine {
                 self.shape_meta.insert(uuid.clone(), meta.clone());
                 new_shapes_for_page.push((stub, meta));
             } else if is_fill {
-                // Fill shape: use point_list for geometric rendering (pen_type 17 = polygon)
-                let point_list: Vec<[f32; 2]> = points.iter().map(|p| [p.x, p.y]).collect();
+                // Fill shape → pen_type 40 GeoJSON (device's native geometric shape format)
+                let fc = fill_color.unwrap_or(color_rgba);
+                let (extra_json, matrix) = match pen_type {
+                    0 => build_oval_geojson(&points, &fc, &color_rgba, thickness),
+                    1 => build_rect_geojson(&points, &fc, &color_rgba, thickness),
+                    _ => build_polygon_geojson(&points, &fc, &color_rgba, thickness),
+                };
                 let stub = Stroke { uuid: uuid.clone(), points: Vec::new() };
                 let meta = ShapeMeta {
-                    pen_type,
+                    pen_type: 40,
                     thickness,
                     color_rgba,
-                    fill_color,
-                    point_list,
+                    fill_color: Some(fc), // Always set fillColor — required for device to render fills
+                    extra_json: Some(extra_json),
+                    matrix: Some(matrix),
                     page_id: Some(page_id.clone()),
                     created_ts: now + i as u64,
                     zorder: now + i as u64,
                     ..Default::default()
                 };
                 self.shape_meta.insert(uuid.clone(), meta.clone());
-                // No stroke data — geometric shapes use point_list only
+                // pen_type 40 does NOT use binary points — only GeoJSON in protobuf field 20
                 new_shapes_for_page.push((stub, meta));
             } else {
                 // Stroke shape: add to notes for binary point data
@@ -2143,9 +2520,9 @@ impl AppEngine {
                                 );
                                 ctx.begin_path();
                                 let _ = ctx.ellipse(cx, cy, rx.max(0.1), ry.max(0.1), 0.0, 0.0, 2.0 * std::f64::consts::PI);
-                                // Reset to identity for strokeUniform
+                                // Reset to identity for strokeUniform — keep the per-feature
+                                // strokeAttr line width that was already set (line 2293-2297)
                                 let _ = ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
-                                ctx.set_line_width(thickness);
                                 if let Some(ref fc) = fill_color {
                                     ctx.set_fill_style_str(fc);
                                     ctx.fill();
@@ -2410,89 +2787,145 @@ impl AppEngine {
     }
 
     pub fn export(&self) -> Result<js_sys::Uint8Array, JsValue> {
+        // Simple rewrite approach (matches rewrite_note.py):
+        // Iterate ALL entries in original ZIP; replace point/shape content; copy rest verbatim.
         let mut out = Vec::new();
         {
             let mut wr = ZipWriter::new(Cursor::new(&mut out));
             let opt = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            let dir_opt = SimpleFileOptions::default();
             let mut arc = ZipArchive::new(Cursor::new(&self.zip_bytes)).map_err(|_| JsValue::from_str("ZIP err"))?;
-            let r_map: HashMap<_, _> = self.deb_notes.iter().map(|nd| (nd.path.clone(), build_points(nd))).collect();
 
-            let mut appended_pages: HashSet<String> = HashSet::new();
+            // Build replacement point data: path -> bytes
+            let r_map: HashMap<_, _> = self.deb_notes.iter()
+                .map(|nd| (nd.path.clone(), build_points(nd)))
+                .collect();
 
-            for i in 0..arc.len() {
-                let Ok(mut f) = arc.by_index(i) else { continue; }; let name = f.name().to_string();
-                if name.contains("/stash/") { continue; }
-                if wr.start_file(&name, opt).is_err() { continue; }
-                if let Some(d) = r_map.get(&name) { wr.write_all(d).unwrap(); }
-                else if (!self.meta_overrides.is_empty() || !self.new_shapes.is_empty()) && name.ends_with(".zip") && name.contains("shape") {
+            // Find the first shape zip path (not stash)
+            let shape_zip_path: Option<String> = (0..arc.len()).find_map(|i| {
+                let f = arc.by_index(i).ok()?;
+                let name = f.name().to_string();
+                if name.ends_with(".zip") && name.contains("shape") && !name.contains("stash") {
+                    Some(name)
+                } else {
+                    None
+                }
+            });
+
+            // Build replacement shape inner ZIP
+            let shape_replacement: Option<Vec<u8>> = shape_zip_path.as_ref().and_then(|szp| {
+                // Collect all shapes: new SVG-imported shapes
+                let all_new: Vec<(Stroke, ShapeMeta)> = self.new_shapes.values()
+                    .flat_map(|v| v.iter().cloned())
+                    .collect();
+
+                if all_new.is_empty() && self.meta_overrides.is_empty() {
+                    return None; // No changes to shape data
+                }
+
+                let inner_name = szp.split('/').last().unwrap_or("").replace(".zip", "");
+
+                if !all_new.is_empty() {
+                    // SVG import: replace shape data entirely with new shapes
+                    let shape_pb = build_shape_protobuf(&all_new, "", "");
+                    let mut inner_buf = Vec::new();
+                    {
+                        let mut inner_wr = ZipWriter::new(Cursor::new(&mut inner_buf));
+                        let _ = inner_wr.start_file(&inner_name, opt);
+                        inner_wr.write_all(&shape_pb).unwrap();
+                        inner_wr.finish().unwrap();
+                    }
+                    Some(inner_buf)
+                } else {
+                    // Meta overrides only: patch existing shape protobuf
                     let mut z_data = Vec::new();
-                    if f.read_to_end(&mut z_data).is_ok() {
-                        if let Ok(mut inner_arc) = ZipArchive::new(Cursor::new(&z_data)) {
-                            let mut inner_buf = Vec::new();
-                            {
-                                let mut inner_wr = ZipWriter::new(Cursor::new(&mut inner_buf));
-                                for j in 0..inner_arc.len() {
-                                    let Ok(mut sf) = inner_arc.by_index(j) else { continue; };
-                                    let inner_name = sf.name().to_string();
-                                    let _ = inner_wr.start_file(&inner_name, opt);
-                                    let mut sh_data = Vec::new();
-                                    if sf.read_to_end(&mut sh_data).is_ok() {
-                                        let mut patched = if !self.meta_overrides.is_empty() {
-                                            patch_shape_protobuf(&sh_data, &self.meta_overrides)
-                                        } else {
-                                            sh_data.clone()
-                                        };
-
-                                        // Append new SVG-imported shapes to the protobuf
-                                        let page_id_from_path = {
-                                            let parts: Vec<&str> = name.split('/').collect();
-                                            parts.iter().position(|&x| x == "shape")
-                                                .and_then(|idx| parts.get(idx + 1))
-                                                .map(|s| s.split('#').next().unwrap_or(s))
-                                        };
-
-                                        if let Some(pid) = page_id_from_path {
-                                            if !appended_pages.contains(pid) {
-                                                if let Some(new_shapes_for_page) = self.new_shapes.get(pid) {
-                                                    let parts: Vec<&str> = inner_name.split('#').collect();
-                                                    let shape_doc_uuid = parts.get(1).copied().unwrap_or("");
-
-                                                    let points_doc_uuid = self.deb_notes.iter()
-                                                        .find(|n| note_page_id(&n.path) == Some(pid))
-                                                        .and_then(|n| {
-                                                            let p: Vec<&str> = n.path.split('/').collect();
-                                                            p.iter().position(|&x| x == "point")
-                                                                .and_then(|pos| p.get(pos + 2))
-                                                                .and_then(|raw| {
-                                                                    let mut s = raw.split('#');
-                                                                    s.next();
-                                                                    s.next()
-                                                                })
-                                                        })
-                                                        .unwrap_or("");
-
-                                                    let appended = build_shape_protobuf(new_shapes_for_page, points_doc_uuid, shape_doc_uuid);
-                                                    patched.extend(appended);
-                                                    appended_pages.insert(pid.to_string());
-                                                }
-                                            }
-                                        }
-
-                                        inner_wr.write_all(&patched).unwrap();
-                                    }
-                                }
-                                inner_wr.finish().unwrap();
-                            }
-                            wr.write_all(&inner_buf).unwrap();
-                        } else {
-                            wr.write_all(&z_data).unwrap();
+                    let mut arc2 = ZipArchive::new(Cursor::new(&self.zip_bytes)).ok()?;
+                    for i in 0..arc2.len() {
+                        let mut f = arc2.by_index(i).ok()?;
+                        if f.name() == szp.as_str() {
+                            f.read_to_end(&mut z_data).ok()?;
+                            break;
                         }
                     }
+                    if let Ok(mut inner_arc) = ZipArchive::new(Cursor::new(&z_data)) {
+                        let mut inner_buf = Vec::new();
+                        {
+                            let mut inner_wr = ZipWriter::new(Cursor::new(&mut inner_buf));
+                            for j in 0..inner_arc.len() {
+                                let Ok(mut sf) = inner_arc.by_index(j) else { continue; };
+                                let sname = sf.name().to_string();
+                                let _ = inner_wr.start_file(&sname, opt);
+                                let mut sh_data = Vec::new();
+                                if sf.read_to_end(&mut sh_data).is_ok() {
+                                    let patched = patch_shape_protobuf(&sh_data, &self.meta_overrides);
+                                    inner_wr.write_all(&patched).unwrap();
+                                }
+                            }
+                            inner_wr.finish().unwrap();
+                        }
+                        Some(inner_buf)
+                    } else {
+                        None
+                    }
                 }
-                else { let mut b = Vec::new(); if f.read_to_end(&mut b).is_ok() { wr.write_all(&b).unwrap(); } }
+            });
+
+            // Simple rewrite: iterate ALL entries, replace point/shape, copy rest verbatim
+            let has_svg_import = !self.new_shapes.is_empty();
+            for i in 0..arc.len() {
+                let Ok(mut f) = arc.by_index(i) else { continue; };
+                let name = f.name().to_string();
+
+                // Handle directory entries
+                if name.ends_with('/') {
+                    let _ = wr.add_directory(&name, dir_opt);
+                    continue;
+                }
+
+                if wr.start_file(&name, opt).is_err() { continue; }
+
+                if let Some(d) = r_map.get(&name) {
+                    // Replace point data
+                    wr.write_all(d).unwrap();
+                } else if shape_replacement.is_some() && shape_zip_path.as_deref() == Some(&name) {
+                    // Replace shape ZIP entirely
+                    wr.write_all(shape_replacement.as_ref().unwrap()).unwrap();
+                } else if has_svg_import && (name.ends_with("note_info") || name == "note_tree") {
+                    // Patch note_info: blank template + correct page dimensions
+                    let mut b = Vec::new();
+                    if f.read_to_end(&mut b).is_ok() {
+                        let patched = patch_note_info_bytes(&b, self.canvas_w, self.canvas_h);
+                        wr.write_all(&patched).unwrap();
+                    }
+                } else if has_svg_import && name.contains("virtual/doc/pb/") {
+                    // Patch virtual/doc/pb: page size + clear template
+                    let mut b = Vec::new();
+                    if f.read_to_end(&mut b).is_ok() {
+                        let patched = patch_virtual_doc_bytes(&b, self.canvas_w, self.canvas_h);
+                        wr.write_all(&patched).unwrap();
+                    }
+                } else if has_svg_import && name.contains("virtual/page/pb/") {
+                    // Patch virtual/page/pb: page rects + clear template refs
+                    let mut b = Vec::new();
+                    if f.read_to_end(&mut b).is_ok() {
+                        let patched = patch_virtual_page_bytes(&b, self.canvas_w, self.canvas_h);
+                        wr.write_all(&patched).unwrap();
+                    }
+                } else if has_svg_import && name.contains("template_json") {
+                    // Clear template file content
+                    wr.write_all(b"").unwrap();
+                } else {
+                    // Copy verbatim
+                    let mut b = Vec::new();
+                    if f.read_to_end(&mut b).is_ok() {
+                        wr.write_all(&b).unwrap();
+                    }
+                }
             }
+
             if wr.finish().is_err() { return Err(JsValue::from_str("ZIP finish err")); }
         }
+
         Ok(js_sys::Uint8Array::from(out.as_slice()))
     }
 

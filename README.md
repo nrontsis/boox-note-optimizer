@@ -270,6 +270,19 @@ Field 12 in the shape protobuf identifies the brush tool. Observed values and th
 - **Text types** (6, 16): Text boxes with plain text (field 10) and/or HTML rich text (field 22). See **Text Boxes** section.
 - **Geometric shapes** (40): GeoJSON-based vector shapes using field 20. See **Geometric Shapes** section.
 
+### SVG Import: Fill Export Format
+
+When importing SVGs into `.note` format, filled shapes are converted to pen_type 40 (GeoJSON geometric shapes) which supports native fills via the `fillAttr` property. Key lessons:
+
+- **pen_type 0, 1, 17 are NOT used in any observed `.note` files.** Using them results in unfilled outlines.
+- **pen_type 40 supports fills natively** via `displayFillColor` and `fillAttr` in the GeoJSON `featureCollection` (protobuf field 20). The device renders these correctly.
+- **pen_type 40 does NOT use binary `#points` data.** Geometry is stored entirely in the GeoJSON. The matrix (protobuf field 8) transforms local → page coordinates.
+
+**Conversion pipeline for SVG fills:**
+1. Ellipses → pen_type 40 `MultiPoint` with `subType: "Oval"` + `fillAttr`
+2. Rectangles → pen_type 40 `Polygon` (4-edge rectangle) + `fillAttr`
+3. Polygons → pen_type 40 `Polygon` (edge pairs) + `fillAttr`
+
 ### Rendering Pipeline
 
 Each stroke is rendered by:
