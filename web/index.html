@@ -13,7 +13,21 @@
     
     <script>
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('sw.js');
+            // nocache=1: clear all caches and re-register SW to force latest version
+            if (new URLSearchParams(location.search).get('nocache') === '1') {
+                caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k)))).then(() => {
+                    navigator.serviceWorker.getRegistrations().then(regs => {
+                        Promise.all(regs.map(r => r.unregister())).then(() => {
+                            // Strip nocache param and reload clean
+                            const u = new URL(location.href);
+                            u.searchParams.delete('nocache');
+                            location.replace(u.toString());
+                        });
+                    });
+                });
+            } else {
+                navigator.serviceWorker.register('sw.js');
+            }
         }
     </script>
     <script>
@@ -115,7 +129,7 @@
         <div class="flex items-center gap-3 md:gap-4">
             <div>
                 <h1 class="text-xl md:text-2xl font-bold tracking-tight text-gray-900">Optimizer for Boox Notes</h1>
-                <p class="text-[9px] md:text-[11px] text-gray-500 mt-0.5 uppercase font-bold tracking-wider">Client-side execution<span class="hidden sm:inline"> - fully private, no data leaves your device.</span></p>
+                <p class="text-[9px] md:text-[11px] text-gray-500 mt-0.5 uppercase font-bold tracking-wider">Runs locally<span class="hidden sm:inline"> &mdash; your files never leave your device</span></p>
             </div>
         </div>
         
@@ -140,7 +154,7 @@
             <button id="headerUploadBtn" class="hidden px-4 md:px-5 py-2 md:py-2.5 bg-black text-white rounded-lg md:rounded-xl shadow-sm text-xs md:text-sm font-bold cursor-pointer hover:bg-gray-800 transition whitespace-nowrap">
                 Load New File
             </button>
-            <input type="file" id="headerFileInput" accept=".note,*/*" class="hidden">
+            <input type="file" id="headerFileInput" accept=".note,.svg,*/*" class="hidden">
         </div>
     </header>
 
@@ -163,9 +177,11 @@
                 
                 <div id="exportVisualsSection" class="flex flex-col gap-2">
                     <span class="text-[10px] md:text-[11px] font-bold text-gray-400 uppercase tracking-widest">Export Visuals</span>
-                    <div id="exportVisualsHint" class="flex items-center gap-1.5 text-[11px] md:text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
-                        <svg class="w-3.5 h-3.5 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
-                        Turn on visualizer for PDF/SVG export
+                    <label class="flex items-center gap-2.5 cursor-pointer py-1">
+                        <input type="checkbox" id="chkKaleido" class="w-4 h-4 accent-black cursor-pointer rounded">
+                        <span class="text-[11px] md:text-xs text-gray-600">Simulate e-ink display colors</span>
+                    </label>
+                    <div id="exportVisualsHint" class="hidden flex items-center gap-1.5 text-[11px] md:text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
                     </div>
                     <div class="flex gap-2">
                         <button id="btnOptPdf" class="flex-1 py-2.5 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-800 rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5">
@@ -177,6 +193,14 @@
                             SVG
                         </button>
                     </div>
+                    <button id="btnEditOnline" class="w-full py-2.5 bg-gradient-to-r from-violet-500 to-indigo-500 hover:from-violet-600 hover:to-indigo-600 text-white rounded-lg text-xs md:text-[13px] font-bold shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 0 0-2.455 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z"/></svg>
+                        Edit Online
+                    </button>
+                    <details class="mt-1.5 text-[11px] text-gray-400">
+                        <summary class="cursor-pointer hover:text-gray-500 select-none">How does Edit Online work?</summary>
+                        <p class="mt-1 leading-relaxed text-gray-500">Your drawing is copied to the clipboard as SVG, then <a href="https://boxy-svg.com" target="_blank" class="underline hover:text-violet-500">Boxy SVG</a> opens in a new tab. You may need to allow clipboard permissions for the editor. Use <b>File &rarr; New From Clipboard</b> to paste it. You can also download the .svg and edit it in any SVG editor like <a href="https://inkscape.org" target="_blank" class="underline hover:text-violet-500">Inkscape</a>.</p>
+                    </details>
                 </div>
             </div>
 
@@ -247,40 +271,41 @@
 
         <div id="mainArea" class="relative flex flex-col bg-white border border-gray-200 rounded-xl md:rounded-2xl shadow-sm overflow-hidden min-h-[65vh] md:min-h-0 md:flex-1 shrink-0 w-full md:h-full">
             
-            <div id="uploadZone" class="flex-1 flex flex-col items-center justify-center bg-white overflow-y-auto px-4 py-8">
-                <div class="p-6 md:p-8 w-full max-w-2xl flex flex-col items-center cursor-pointer group" onclick="document.getElementById('fileInput').click()">
-                    <div class="p-8 md:p-10 w-full border-4 border-dashed border-gray-300 rounded-[2rem] md:rounded-[3rem] text-center hover:border-blue-400 hover:bg-blue-50/50 transition">
-                        <svg class="w-16 h-16 md:w-20 md:h-20 mx-auto mb-4 text-blue-500/80 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
-                        <h2 class="text-2xl md:text-3xl font-extrabold text-gray-900 mb-2">Select a .note file</h2>
-                        <p class="text-gray-500 text-sm md:text-lg">Tap or click to browse locally.</p>
-                        <input type="file" id="fileInput" accept=".note,*/*" class="hidden">
+            <div id="uploadZone" class="flex-1 flex flex-col items-center justify-center bg-white overflow-y-auto px-4 py-4 md:py-8">
+
+                <div class="max-w-lg w-full mb-5 md:mb-7 px-4 text-center">
+                    <h2 class="text-base md:text-lg font-bold text-gray-900 mb-2">A free toolkit for your Boox notebooks</h2>
+                    <p class="text-sm md:text-base text-gray-500 leading-relaxed">Shrink bloated .note files so they sync faster, preview your handwriting on any screen, export to PDF or SVG, and convert SVGs into .note format. Fully private &mdash; your files never leave your device.</p>
+                </div>
+
+                <div class="w-full max-w-lg flex flex-col items-center cursor-pointer group" onclick="document.getElementById('fileInput').click()">
+                    <div class="px-6 py-8 md:px-10 md:py-10 w-full border-4 border-dashed border-gray-300 rounded-2xl md:rounded-[3rem] text-center hover:border-blue-400 hover:bg-blue-50/50 transition">
+                        <svg class="w-10 h-10 md:w-14 md:h-14 mx-auto mb-2 md:mb-3 text-blue-500/80 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                        <h2 class="text-lg md:text-2xl font-extrabold text-gray-900 mb-0.5">Drop a .note or .svg file</h2>
+                        <p class="text-gray-400 text-[11px] md:text-sm">or tap to browse</p>
+                        <input type="file" id="fileInput" accept=".note,.svg,*/*" class="hidden">
                     </div>
                 </div>
 
-                <div class="flex items-center justify-center gap-4 text-xs font-bold text-gray-400 tracking-widest my-2 w-full max-w-md">
-                    <div class="h-px w-8 md:w-12 bg-gray-300"></div>OR<div class="h-px w-8 md:w-12 bg-gray-300"></div>
+                <div class="flex items-center justify-center gap-4 text-[10px] md:text-xs font-bold text-gray-400 tracking-widest my-2 w-full max-w-md">
+                    <div class="h-px w-6 md:w-12 bg-gray-300"></div>OR<div class="h-px w-6 md:w-12 bg-gray-300"></div>
                 </div>
-                
-                <div class="flex flex-col sm:flex-row items-center justify-center gap-3 md:gap-4 mb-6 md:mb-8 w-full max-w-md">
-                    <button id="btnDrive" class="w-full sm:w-1/2 flex items-center justify-center gap-2.5 px-6 py-2.5 md:py-3 bg-white text-gray-800 border border-gray-200 font-bold text-sm md:text-base rounded-full shadow-sm hover:border-blue-400 hover:bg-blue-50 transition disabled:opacity-50">
-                        <img src="https://upload.wikimedia.org/wikipedia/commons/1/12/Google_Drive_icon_%282020%29.svg" class="w-5 h-5 md:w-6 md:h-6" onerror="this.style.display='none'" />
+
+                <div class="flex items-center justify-center gap-2 md:gap-3 mb-3 md:mb-5 w-full max-w-sm">
+                    <button id="btnDrive" class="flex-1 flex items-center justify-center gap-2 px-4 py-2 md:py-2.5 bg-white text-gray-800 border border-gray-200 font-bold text-xs md:text-sm rounded-full shadow-sm hover:border-blue-400 hover:bg-blue-50 transition disabled:opacity-50">
+                        <img src="https://upload.wikimedia.org/wikipedia/commons/1/12/Google_Drive_icon_%282020%29.svg" class="w-4 h-4 md:w-5 md:h-5" onerror="this.style.display='none'" />
                         <span id="txtDrive">Google Drive</span>
                     </button>
 
-                    <button id="btnDemo" class="w-full sm:w-1/2 px-6 py-2.5 md:py-3 bg-white text-gray-800 border border-gray-200 font-bold text-sm md:text-base rounded-full shadow-sm hover:border-gray-300 hover:bg-gray-100 transition disabled:opacity-50" onclick="window.loadDemo(event)">
-                        Load Demo File
+                    <button id="btnDemo" class="flex-1 px-4 py-2 md:py-2.5 bg-white text-gray-800 border border-gray-200 font-bold text-xs md:text-sm rounded-full shadow-sm hover:border-gray-300 hover:bg-gray-100 transition disabled:opacity-50" onclick="window.loadDemo(event)">
+                        Try a Demo
                     </button>
                 </div>
 
-                <div class="max-w-lg w-full px-5 md:px-6 pb-6 md:pb-8">
-                    <div class="bg-gray-50 p-5 md:p-6 rounded-2xl border border-gray-200">
-                        <h3 class="font-bold text-gray-900 mb-2 md:mb-3">Obtaining your files:</h3>
-                        <p class="text-xs md:text-sm text-gray-600 mb-4 md:mb-5">From the native Notes app, long-press a notebook, tap <b>Share and Export</b> &rarr; <b>Export to local (.note)</b>.</p>
-                        <div class="bg-blue-50 p-3 md:p-4 rounded-xl text-blue-900 text-xs md:text-sm border border-blue-100 leading-relaxed shadow-sm">
-                            <strong class="block mb-1">💡 Pro Tip</strong>
-                            Install the <a href="https://github.com/nrontsis/boox-note-optimizer/releases" target="_blank" class="underline font-semibold">Android APK</a> on your Boox device for the best experience — it lets you open optimized files directly in the Notes app.
-                            <span class="block mt-2 pt-2 border-t border-blue-100">Alternatively, open this page in Chrome on your Boox and select files from internal storage (<code class="bg-blue-100/60 px-1.5 py-0.5 rounded text-[11px] md:text-xs font-mono">Storage/note/</code>).</span>
-                        </div>
+                <div class="max-w-sm w-full px-4 pb-2 md:pb-4">
+                    <div class="bg-blue-50 p-3 md:p-4 rounded-xl border border-blue-100 text-[11px] md:text-xs text-blue-900 leading-relaxed space-y-2">
+                        <p><b>Pro Tip:</b> Install the <a href="https://github.com/nrontsis/boox-note-optimizer/releases" target="_blank" class="underline font-semibold">Android APK</a> on your Boox to share files directly from Notes and open results in one tap.</p>
+                        <p>Or get your .note files manually: in Notes, long-press a notebook &rarr; <b>Share and Export</b> &rarr; <b>Export to local (.note)</b>.</p>
                     </div>
                 </div>
             </div>
@@ -324,7 +349,32 @@
             </div>
 
             <div id="workspaceView" class="hidden flex-1 flex-col w-full h-full relative">
-                
+
+                <div id="previewOverlay" class="hidden absolute inset-0 z-50 bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
+                    <div class="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 flex flex-col items-center text-center">
+                        <div class="bg-amber-100 text-amber-700 rounded-full w-12 h-12 flex items-center justify-center mb-3 shrink-0">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        </div>
+                        <h3 class="text-base font-bold text-gray-900 mb-1">Experimental Preview</h3>
+                        <p class="text-xs text-gray-500 leading-relaxed mb-4">
+                            This preview may look slightly different from your Boox device. Don't worry — optimization barely changes the .note file, so it will look fine on your device.
+                        </p>
+                        <div class="flex flex-col w-full gap-2">
+                            <div id="overlayActionRow" class="flex gap-2 w-full">
+                                <button id="btnOverlayShare" class="hidden flex-1 py-2.5 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                                    Open .note
+                                </button>
+                                <button id="btnOverlayDl" class="flex-1 py-2.5 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                                    Download Optimized .note
+                                </button>
+                            </div>
+                            <button id="btnOverlayDismiss" class="w-full py-2.5 bg-gray-100 text-gray-700 font-bold rounded-lg hover:bg-gray-200 transition text-sm">
+                                Dismiss &amp; Explore Preview
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="flex justify-between items-center p-2 md:p-3 border-b border-gray-200 bg-white shadow-sm z-30 shrink-0">
                     <div class="flex items-center gap-2 md:gap-4">
                         <button id="btnResetZoom" class="px-2.5 md:px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-xs md:text-sm font-semibold rounded text-gray-700 transition shadow-sm">Fit to Screen</button>
@@ -359,14 +409,26 @@
     <div id="modalBackdrop" class="fixed inset-0 bg-gray-900/60 z-[100] hidden items-center justify-center p-4 backdrop-blur-sm transition-opacity opacity-0" onclick="if(event.target===this) closeModal()">
         
         <div id="modalExplain" class="hidden bg-white rounded-2xl shadow-2xl max-w-2xl w-full flex-col overflow-hidden relative transform transition-transform scale-95 modal-content">
-            <button onclick="closeModal()" class="absolute top-6 right-6 text-gray-400 hover:text-black transition">✖</button>
-            <div class="p-8 pb-6 border-b border-gray-100 bg-gray-50">
-                <h2 class="text-2xl font-bold text-gray-900">Stroke Optimization</h2>
+            <button onclick="closeModal()" class="absolute top-4 right-4 md:top-6 md:right-6 text-gray-400 hover:text-black transition p-2">✖</button>
+            <div class="p-5 md:p-8 pb-4 md:pb-6 border-b border-gray-100 bg-gray-50">
+                <h2 class="text-xl md:text-2xl font-bold text-gray-900 pr-8">How it Works</h2>
             </div>
-            <div class="p-8 space-y-5 text-[15px] text-gray-800 leading-relaxed">
-                <p>To keep writing lag-free, Boox tablets record far more pen data than actually needed. While this is great for responsiveness, it results in unnecessarily large files filled with redundant points&mdash;like saving hundreds of overlapping dots just to draw a simple straight line.</p>
-                <p>Instead of blindly smoothing out your lines and altering your handwriting, this app safely cleans up the extra data. It analyzes the exact position, pressure, and tilt of your strokes, and removes a point only if the change is completely invisible to the human eye.</p>
-                <p>This results in a drastically smaller file sizes with zero loss in visual quality.</p>
+            <div class="p-5 md:p-8 space-y-4 md:space-y-5 text-sm md:text-[15px] text-gray-800 leading-relaxed overflow-y-auto max-h-[60vh] custom-scrollbar">
+                <div>
+                    <h3 class="font-bold text-gray-900 mb-1">Optimize .note files</h3>
+                    <p>Boox tablets record far more pen data than needed to keep writing smooth. This tool removes redundant points while preserving position, pressure, and tilt &mdash; your handwriting looks identical, but files shrink by 5&ndash;10x.</p>
+                </div>
+                <div>
+                    <h3 class="font-bold text-gray-900 mb-1">Import SVGs</h3>
+                    <p>Convert SVG drawings into .note format so you can view and annotate them on your Boox device. Shapes, paths, and text are supported.</p>
+                </div>
+                <div>
+                    <h3 class="font-bold text-gray-900 mb-1">Preview &amp; export</h3>
+                    <p>See a side-by-side comparison of original vs optimized, export as PDF or SVG, and simulate how colors look on your e-ink display.</p>
+                </div>
+                <div class="bg-gray-50 p-3 md:p-4 rounded-xl border border-gray-200 text-xs md:text-sm text-gray-500">
+                    Everything runs in your browser &mdash; your files are never uploaded anywhere.
+                </div>
             </div>
         </div>
 
@@ -416,7 +478,7 @@
         let page = 0;
         let originalFileSize = 0;
         let optimizedBlob = null;
-        let previewEnabled = 'false';
+        let previewEnabled = false;
         let comparisonMode = false;
         let pdfW = 1860;
         let pdfH = 2480;
@@ -426,8 +488,12 @@
             headerBtn: document.getElementById('headerUploadBtn'), fileInpHdr: document.getElementById('headerFileInput'),
             uploadZone: document.getElementById('uploadZone'), fileInp: document.getElementById('fileInput'),
             sidebar: document.getElementById('sidebar'), mainArea: document.getElementById('mainArea'),
-            workspaceView: document.getElementById('workspaceView'), previewPlaceholder: document.getElementById('previewPlaceholder'), 
-            
+            workspaceView: document.getElementById('workspaceView'), previewPlaceholder: document.getElementById('previewPlaceholder'),
+            previewOverlay: document.getElementById('previewOverlay'),
+            btnOverlayShare: document.getElementById('btnOverlayShare'),
+            btnOverlayDl: document.getElementById('btnOverlayDl'),
+            btnOverlayDismiss: document.getElementById('btnOverlayDismiss'),
+
             btnLoadPreview: document.getElementById('btnLoadPreview'),
             btnShareDirect: document.getElementById('btnShareDirect'),
             btnDlDirect: document.getElementById('btnDlDirect'),
@@ -443,11 +509,12 @@
             
             paginator: document.getElementById('paginator'), pageText: document.getElementById('pageText'), btnResetZoom: document.getElementById('btnResetZoom'),
             btnShareNote: document.getElementById('btnShareNote'), btnDlNote: document.getElementById('btnDlNote'), btnDlNoteIcon: document.getElementById('btnDlNoteIcon'), 
-            btnOptPdf: document.getElementById('btnOptPdf'), btnOptSvg: document.getElementById('btnOptSvg'),
+            btnOptPdf: document.getElementById('btnOptPdf'), btnOptSvg: document.getElementById('btnOptSvg'), btnEditOnline: document.getElementById('btnEditOnline'),
             exportVisualsSection: document.getElementById('exportVisualsSection'), exportVisualsHint: document.getElementById('exportVisualsHint'), btnReportIssue: document.getElementById('btnReportIssue'),
 
             chkAutoPreview: document.getElementById('chkAutoPreview'),
             chkAutoOpen: document.getElementById('chkAutoOpen'),
+            chkKaleido: document.getElementById('chkKaleido'),
 
             btnHome: document.getElementById('headerHomeBtn'),
             btnDrive: document.getElementById('btnDrive'), txtDrive: document.getElementById('txtDrive'),
@@ -491,6 +558,7 @@
         const LS_FOLDER = 'boox_gdrive_folder';
         const LS_AUTO_PREVIEW = 'boox_auto_preview';
         const LS_AUTO_OPEN = 'boox_auto_open';
+        const LS_AUTO_SHARE_PROMPTED = 'boox_auto_share_prompted';
 
         function saveToken(token, expiresIn) {
             try { localStorage.setItem(LS_TOKEN, JSON.stringify({ token, expires_at: Date.now() + (expiresIn - 60) * 1000 })); } catch(e) {}
@@ -530,6 +598,11 @@
         ui.chkAutoOpen.addEventListener('change', () => {
             try { localStorage.setItem(LS_AUTO_OPEN, ui.chkAutoOpen.checked); } catch(e) {}
         });
+        ui.chkKaleido.addEventListener('change', () => {
+            try { localStorage.setItem('kaleido3', ui.chkKaleido.checked); } catch(e) {}
+            renderCanvases();
+        });
+        try { ui.chkKaleido.checked = localStorage.getItem('kaleido3') === 'true'; } catch(e) {}
 
         let fileSource = null; // { type: 'gdrive'|'local'|'demo', id?, name?, size?, file? }
         let localFileRef = null; // File object reference for local refresh (session-only)
@@ -591,9 +664,8 @@
             const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
                 .setMode(google.picker.DocsViewMode.LIST)
                 .setIncludeFolders(false)
-                // Some of these is the correct type :laugh:
-                .setMimeTypes('application/zip,application/x-zip-compressed,application/x-zip,application/octet-stream')
-                .setQuery('.note');
+                .setMimeTypes('application/zip,application/x-zip-compressed,application/x-zip,application/octet-stream,image/svg+xml')
+                .setQuery('.note OR .svg');
 
             const lastFolder = loadFolder();
             if (lastFolder) {
@@ -624,12 +696,19 @@
             if (!res.ok) throw new Error("Failed to securely download file from Drive.");
 
             const ab = await res.arrayBuffer();
-            filename = name.replace('.note', '');
+            filename = name.replace('.note', '').replace('.svg', '');
             originalFileSize = parseInt(size || ab.byteLength);
             fileSource = { type: 'gdrive', id, name, size: originalFileSize };
             localFileRef = null;
             saveFileSource({ type: 'gdrive', id, name, size: originalFileSize });
-            await loadBuffer(new Uint8Array(ab));
+
+            if (name.endsWith('.svg')) {
+                if (!confirm("SVG import is experimental with limited support. Shapes, paths, and text are supported.\n\nGradients, filters, clipping, and CSS styling are not supported.\n\nContinue?")) return;
+                const file = new File([ab], name, { type: 'image/svg+xml' });
+                await handleSvgImport(file);
+            } else {
+                await loadBuffer(new Uint8Array(ab));
+            }
         }
 
         async function pickerCallback(data) {
@@ -712,9 +791,20 @@
         ui.btnReportIssue.href = `https://github.com/nrontsis/boox-note-optimizer/issues/new?title=${encodeURIComponent('.note file issue: [brief description]')}&body=${encodeURIComponent(issueTemplate)}`;
 
         // --- File State Handlers ---
-        const dlHandler = () => { if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), exportName()); };
-        ui.btnDlDirect.onclick = dlHandler;
-        ui.btnDlDirectIcon.onclick = dlHandler;
+        function downloadOptimized() {
+            if (!optimizedBlob) return;
+            if (window.Android && window.Android.saveFile) {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    window.Android.saveFile(reader.result.split(',')[1], exportName());
+                };
+                reader.readAsDataURL(optimizedBlob);
+            } else {
+                downloadUrl(URL.createObjectURL(optimizedBlob), exportName());
+            }
+        }
+        ui.btnDlDirect.onclick = downloadOptimized;
+        ui.btnDlDirectIcon.onclick = downloadOptimized;
 
         async function shareOptimizedFile() {
             if (!optimizedBlob) return;
@@ -726,6 +816,17 @@
                     window.Android.receiveFile(base64, exportName());
                 };
                 reader.readAsDataURL(optimizedBlob);
+
+                // First-time share prompt: offer to enable auto-share
+                if (!ui.chkAutoOpen.checked && localStorage.getItem(LS_AUTO_SHARE_PROMPTED) !== 'true') {
+                    try { localStorage.setItem(LS_AUTO_SHARE_PROMPTED, 'true'); } catch(e) {}
+                    setTimeout(() => {
+                        if (confirm('Automatically send optimized files back to Boox Notes?\n\nYou can change this in Advanced Settings.')) {
+                            ui.chkAutoOpen.checked = true;
+                            try { localStorage.setItem(LS_AUTO_OPEN, 'true'); } catch(e) {}
+                        }
+                    }, 500);
+                }
                 return;
             }
             // Try Web Share API, fall back to download
@@ -747,13 +848,11 @@
 
             ui.previewPlaceholder.classList.add('hidden');
             ui.previewPlaceholder.classList.remove('flex');
+            ui.previewOverlay.classList.add('hidden');
+            ui.previewOverlay.classList.remove('flex');
 
             ui.workspaceView.classList.remove('hidden');
             ui.workspaceView.classList.add('flex');
-
-            ui.btnOptPdf.disabled = false;
-            ui.btnOptSvg.disabled = false;
-            ui.exportVisualsHint.classList.add('hidden');
 
             // Toggle comparison vs optimized-only layout
             if (comparison) {
@@ -775,6 +874,12 @@
         }
 
         ui.btnLoadPreview.onclick = () => enterPreview(true);
+
+        ui.btnOverlayDismiss.onclick = () => enterPreview(true);
+        ui.btnOverlayDl.onclick = downloadOptimized;
+        ui.btnOverlayShare.onclick = () => {
+            if (typeof shareOptimizedFile === 'function') shareOptimizedFile();
+        };
 
         const loadBuffer = async (uint8arr) => {
             if(app) { try { app.free(); } catch(e) {} }
@@ -822,29 +927,26 @@
             else ui.btnDlDirect.innerText = "Optimizing...";
             ui.btnLoadPreview.disabled = true;
 
+            // Always show workspace with canvas (preview always visible)
+            ui.previewPlaceholder.classList.add('hidden');
+            ui.previewPlaceholder.classList.remove('flex');
+            ui.workspaceView.classList.remove('hidden');
+            ui.workspaceView.classList.add('flex');
+            // Set up single-pane layout
+            comparisonMode = false;
+            ui.paneLeft.classList.add('hidden');
+            ui.splitDivider.classList.add('hidden');
+            ui.paneRight.className = 'w-full h-full relative overflow-hidden pointer-events-none';
+            ui.paneRight.querySelector('.absolute.top-2').classList.add('hidden');
+            ui.exportVisualsHint.classList.add('hidden');
+
             if (ui.chkAutoPreview.checked) {
-                // Skip the placeholder, go straight to workspace
-                ui.previewPlaceholder.classList.add('hidden');
-                ui.previewPlaceholder.classList.remove('flex');
-                ui.workspaceView.classList.remove('hidden');
-                ui.workspaceView.classList.add('flex');
-                // Set up single-pane layout immediately
-                comparisonMode = false;
-                ui.paneLeft.classList.add('hidden');
-                ui.splitDivider.classList.add('hidden');
-                ui.paneRight.className = 'w-full h-full relative overflow-hidden pointer-events-none';
-                ui.paneRight.querySelector('.absolute.top-2').classList.add('hidden');
-                ui.btnOptPdf.disabled = true;
-                ui.btnOptSvg.disabled = true;
-                ui.exportVisualsHint.classList.remove('hidden');
+                ui.previewOverlay.classList.add('hidden');
+                ui.previewOverlay.classList.remove('flex');
             } else {
-                ui.workspaceView.classList.add('hidden');
-                ui.workspaceView.classList.remove('flex');
-                ui.previewPlaceholder.classList.remove('hidden');
-                ui.previewPlaceholder.classList.add('flex');
-                ui.btnOptPdf.disabled = true;
-                ui.btnOptSvg.disabled = true;
-                ui.exportVisualsHint.classList.remove('hidden');
+                // Show overlay on top of the preview
+                ui.previewOverlay.classList.remove('hidden');
+                ui.previewOverlay.classList.add('flex');
             }
 
             page = 0;
@@ -853,13 +955,450 @@
             }, 10);
         };
 
+        async function handleSvgImport(file) {
+            const text = await file.text();
+
+            // If no workspace is loaded, use empty.note as a blank template
+            // (cached by service worker for offline use)
+            if (!app) {
+                const btn = document.getElementById('btnDemo');
+                const ogText = btn ? btn.innerText : "";
+                if (btn) btn.innerText = "Initializing workspace...";
+                try {
+                    const res = await fetch('empty.note');
+                    if (!res.ok) throw new Error();
+                    const ab = await res.arrayBuffer();
+                    filename = file.name.replace('.svg', '');
+                    originalFileSize = ab.byteLength;
+                    fileSource = { type: 'demo' };
+                    await loadBuffer(new Uint8Array(ab));
+                    await new Promise(r => setTimeout(r, 100));
+                } catch (err) {
+                    alert("Could not initialize a blank workspace. Please load a .note file first.");
+                    if (btn) btn.innerText = ogText;
+                    return;
+                }
+                if (btn) btn.innerText = ogText;
+            } else {
+                filename = file.name.replace('.svg', '');
+            }
+
+            const div = document.createElement('div');
+            div.innerHTML = text.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+            const svgEl = div.querySelector('svg');
+            if (!svgEl) return alert("Invalid SVG file");
+
+            document.body.appendChild(div);
+            div.style.position = 'absolute';
+            div.style.visibility = 'hidden';
+            div.style.top = '-9999px';
+
+            // Pre-process: convert polylines/polygons to paths, and shapes with
+            // complex CTMs (rotation/skew) to paths for sampling. Native .note shapes
+            // only support axis-aligned bounding boxes.
+            // NOTE: Use native .note shape types where possible (pen_type 0=ellipse,
+            // 1=rect, 7=line) instead of converting everything to sampled paths.
+            svgEl.querySelectorAll('polyline, polygon, line, rect, circle, ellipse').forEach(el => {
+                const tag = el.tagName.toLowerCase();
+                const ctm = el.getCTM();
+
+                // Keep axis-aligned shapes as native elements (processed later in unified loop)
+                const isAxisAligned = !ctm || (Math.abs(ctm.b) < 0.001 && Math.abs(ctm.c) < 0.001);
+                if (isAxisAligned && (tag === 'rect' || tag === 'circle' || tag === 'ellipse' || tag === 'line'))
+                    return;
+
+                // Convert to path for: polylines/polygons, and shapes with complex CTMs
+                let d = '';
+                if (tag === 'rect') {
+                    const x = parseFloat(el.getAttribute('x')||0), y = parseFloat(el.getAttribute('y')||0);
+                    const w = parseFloat(el.getAttribute('width')||0), h = parseFloat(el.getAttribute('height')||0);
+                    if (w > 0 && h > 0) d = `M${x},${y} L${x+w},${y} L${x+w},${y+h} L${x},${y+h} Z`;
+                } else if (tag === 'circle') {
+                    const cx = parseFloat(el.getAttribute('cx')||0), cy = parseFloat(el.getAttribute('cy')||0);
+                    const r = parseFloat(el.getAttribute('r')||0);
+                    if (r > 0) d = `M${cx-r},${cy} A${r},${r} 0 1,0 ${cx+r},${cy} A${r},${r} 0 1,0 ${cx-r},${cy} Z`;
+                } else if (tag === 'ellipse') {
+                    const cx = parseFloat(el.getAttribute('cx')||0), cy = parseFloat(el.getAttribute('cy')||0);
+                    const rx = parseFloat(el.getAttribute('rx')||0), ry = parseFloat(el.getAttribute('ry')||0);
+                    if (rx > 0 && ry > 0) d = `M${cx-rx},${cy} A${rx},${ry} 0 1,0 ${cx+rx},${cy} A${rx},${ry} 0 1,0 ${cx-rx},${cy} Z`;
+                } else if (tag === 'line') {
+                    const x1 = el.getAttribute('x1')||0, y1 = el.getAttribute('y1')||0;
+                    const x2 = el.getAttribute('x2')||0, y2 = el.getAttribute('y2')||0;
+                    d = `M${x1},${y1} L${x2},${y2}`;
+                } else if (tag === 'polyline' || tag === 'polygon') {
+                    const pts = el.getAttribute('points');
+                    if (pts) {
+                        const pairs = pts.trim().split(/[\s,]+/);
+                        let first = true;
+                        for (let i = 0; i < pairs.length; i += 2) {
+                            if (pairs[i] !== undefined && pairs[i+1] !== undefined && pairs[i] !== '' && pairs[i+1] !== '') {
+                                d += (first ? 'M' : ' L') + pairs[i] + ' ' + pairs[i+1];
+                                first = false;
+                            }
+                        }
+                        if (tag === 'polygon' && !first) d += ' Z';
+                    }
+                }
+                if (d) {
+                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    path.setAttribute('d', d);
+                    Array.from(el.attributes).forEach(attr => path.setAttribute(attr.name, attr.value));
+                    el.replaceWith(path);
+                }
+            });
+
+            // Check for CSS background-color on the SVG root
+            const svgBg = window.getComputedStyle(svgEl).backgroundColor;
+            const svgBgInline = svgEl.style.backgroundColor || svgEl.getAttribute('style')?.match(/background-color:\s*([^;]+)/)?.[1];
+
+            function parseColor(cStr) {
+                if (!cStr || cStr === 'none') return [0, 0, 0, 1.0];
+                // Handle gradient references: url(#id) or url("#id") → average of stop colors
+                const urlMatch = cStr.match(/url\(\s*["']?#([^"')]+)["']?\s*\)/);
+                if (urlMatch) {
+                    let gradEl = svgEl.querySelector('#' + CSS.escape(urlMatch[1]));
+                    // Follow xlink:href / href chain to find actual stop elements
+                    // (Inkscape puts stops on a base gradient, referenced by others)
+                    let stops = gradEl ? gradEl.querySelectorAll('stop') : [];
+                    let depth = 0;
+                    while (gradEl && stops.length === 0 && depth++ < 5) {
+                        const href = gradEl.getAttribute('xlink:href') || gradEl.getAttribute('href');
+                        if (!href || !href.startsWith('#')) break;
+                        gradEl = svgEl.querySelector('#' + CSS.escape(href.slice(1)));
+                        if (gradEl) stops = gradEl.querySelectorAll('stop');
+                    }
+                    if (stops.length > 0) {
+                        let r = 0, g = 0, b = 0, a = 0;
+                        stops.forEach(s => {
+                            const sc = parseColor(s.getAttribute('stop-color') || s.style.stopColor || 'black');
+                            const sa = parseFloat(s.getAttribute('stop-opacity') ?? s.style.stopOpacity ?? '1');
+                            r += sc[0]; g += sc[1]; b += sc[2]; a += sa;
+                        });
+                        const n = stops.length;
+                        return [Math.round(r/n), Math.round(g/n), Math.round(b/n), a/n];
+                    }
+                    return [0, 0, 0, 1.0];
+                }
+                const tempCtx = document.createElement('canvas').getContext('2d');
+                tempCtx.fillStyle = cStr;
+                const computed = tempCtx.fillStyle;
+                if (computed.startsWith('#')) {
+                    let hex = computed.substring(1);
+                    return [parseInt(hex.substr(0,2),16)||0, parseInt(hex.substr(2,2),16)||0, parseInt(hex.substr(4,2),16)||0, 1.0];
+                }
+                const m = computed.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+                if (m) return [parseInt(m[1]), parseInt(m[2]), parseInt(m[3]), m[4] !== undefined ? parseFloat(m[4]) : 1.0];
+                return [0, 0, 0, 1.0];
+            }
+
+            function generateUUID() {
+                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                    var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+                    return v.toString(16);
+                });
+            }
+
+            // Collect text elements as native .note text boxes (pen_type 16).
+            // NOTE: Use native .note features (text boxes, geometric shapes) instead of
+            // converting everything to strokes. The .note format has built-in support for
+            // text, rectangles, circles, lines, polygons, etc.
+            const textInfos = [];
+            svgEl.querySelectorAll('text').forEach(textEl => {
+                const bbox = textEl.getBBox();
+                if (bbox.width === 0 || bbox.height === 0) return;
+                const style = window.getComputedStyle(textEl);
+                const ctm = textEl.getCTM();
+                const fill = style.fill && style.fill !== 'none' ? style.fill : 'black';
+                const text = textEl.textContent.trim();
+                if (!text) return;
+                const fontSize = parseFloat(style.fontSize);
+                const bold = style.fontWeight === 'bold' || parseInt(style.fontWeight) >= 700;
+                const italic = style.fontStyle === 'italic';
+                const anchor = style.textAnchor || textEl.getAttribute('text-anchor') || 'start';
+                const align = anchor === 'middle' ? 1 : anchor === 'end' ? 2 : 0;
+                textInfos.push({ bbox, ctm, fill, text, fontSize, bold, italic, align });
+            });
+
+            // Resize the .note canvas to match the SVG's aspect ratio.
+            // Uses generous padding to prevent strokes from being clipped at edges
+            // (getBBox excludes stroke widths, so strokes extend beyond the bbox).
+            let scaleX = 1, scaleY = 1, offsetX = 0, offsetY = 0;
+            try {
+                const bbox = svgEl.getBBox();
+                if (bbox && bbox.width > 0 && bbox.height > 0) {
+                    const padding = 100;
+                    const maxDim = 2480;
+                    if (bbox.width >= bbox.height) {
+                        pdfW = maxDim;
+                        pdfH = Math.max(200, Math.round(maxDim * bbox.height / bbox.width));
+                    } else {
+                        pdfH = maxDim;
+                        pdfW = Math.max(200, Math.round(maxDim * bbox.width / bbox.height));
+                    }
+                    if (app) {
+                        app.set_canvas_size(pdfW, pdfH);
+                        [ui.cOrig, ui.cDeb].forEach(c => {
+                            c.width = pdfW; c.height = pdfH;
+                            c.style.width = `${pdfW}px`; c.style.height = `${pdfH}px`;
+                        });
+                    }
+                    const availW = pdfW - padding * 2;
+                    const availH = pdfH - padding * 2;
+                    const scale = Math.min(availW / bbox.width, availH / bbox.height);
+                    scaleX = scale; scaleY = scale;
+                    offsetX = padding - bbox.x * scale;
+                    offsetY = padding - bbox.y * scale;
+                }
+            } catch(e) {}
+
+            // Split paths with multiple subpaths (multiple M commands) into
+            // separate <path> elements. getPointAtLength() traces subpaths
+            // continuously, creating unwanted connecting lines between them.
+            // For evenodd paths: preprocess into separate fills so the device
+            // renderer doesn't need evenodd support (outer=fill, inner=white).
+            svgEl.querySelectorAll('path').forEach(path => {
+                const d = path.getAttribute('d');
+                if (!d) return;
+                const subpaths = d.match(/[Mm][^Mm]*/g);
+                if (!subpaths || subpaths.length <= 1) return;
+
+                const fr = path.getAttribute('fill-rule') || window.getComputedStyle(path).fillRule;
+                if (fr === 'evenodd') {
+                    // Preprocess evenodd: split into separate fills with alternating colors.
+                    // Use containment testing to determine nesting depth.
+                    const fillColor = path.getAttribute('fill') || window.getComputedStyle(path).fill;
+                    const tempCanvas = document.createElement('canvas');
+                    const tctx = tempCanvas.getContext('2d');
+
+                    // Build Path2D for each subpath and find a sample point on each
+                    const subs = subpaths.map(sub => {
+                        const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                        p.setAttribute('d', sub.trim());
+                        document.body.appendChild(p); // needed for getPointAtLength
+                        const len = p.getTotalLength();
+                        const sample = p.getPointAtLength(len * 0.1);
+                        document.body.removeChild(p);
+                        return { d: sub.trim(), path2d: new Path2D(sub.trim()), sample };
+                    });
+
+                    // Compute nesting depth: count how many other subpaths contain this one's sample point
+                    subs.forEach(s => {
+                        s.depth = 0;
+                        subs.forEach(other => {
+                            if (other === s) return;
+                            if (tctx.isPointInPath(other.path2d, s.sample.x, s.sample.y))
+                                s.depth++;
+                        });
+                    });
+
+                    // Even depth = fill (outer), odd depth = hole (white)
+                    subs.forEach(s => {
+                        const clone = path.cloneNode(false);
+                        clone.setAttribute('d', s.d);
+                        clone.removeAttribute('fill-rule');
+                        clone.setAttribute('fill', (s.depth % 2 === 0) ? (fillColor || 'black') : 'white');
+                        path.parentNode.insertBefore(clone, path);
+                    });
+                    path.remove();
+                    return;
+                }
+
+                // Non-evenodd: simple split into separate paths
+                subpaths.forEach(sub => {
+                    const clone = path.cloneNode(false);
+                    clone.setAttribute('d', sub.trim());
+                    path.parentNode.insertBefore(clone, path);
+                });
+                path.remove();
+            });
+
+            const strokes = [];
+
+            // Background color → full-page filled rectangle (must be first for z-order)
+            if (svgBgInline && svgBgInline !== 'transparent' && svgBgInline !== 'rgba(0, 0, 0, 0)') {
+                const bgColor = parseColor(svgBgInline);
+                const bbox = svgEl.getBBox();
+                const t = bbox.y * scaleY + offsetY, l = bbox.x * scaleX + offsetX;
+                const b = (bbox.y + bbox.height) * scaleY + offsetY;
+                const r = (bbox.x + bbox.width) * scaleX + offsetX;
+                strokes.push({
+                    uuid: generateUUID(),
+                    pen_type: 1, thickness: 0,
+                    color: bgColor, fill_color: bgColor, is_fill: true,
+                    points: [{x:l,y:t,pressure:2048,tilt_x:0,tilt_y:0,cum_time:0},
+                             {x:r,y:b,pressure:2048,tilt_x:0,tilt_y:0,cum_time:0}]
+                });
+            }
+
+            // Emit native text boxes for <text> elements
+            textInfos.forEach(info => {
+                const b = info.bbox;
+                let x0 = b.x, y0 = b.y, x1 = b.x + b.width, y1 = b.y + b.height;
+                if (info.ctm) {
+                    const m = info.ctm;
+                    x0 = b.x * m.a + b.y * m.c + m.e;
+                    y0 = b.x * m.b + b.y * m.d + m.f;
+                    x1 = (b.x + b.width) * m.a + (b.y + b.height) * m.c + m.e;
+                    y1 = (b.x + b.width) * m.b + (b.y + b.height) * m.d + m.f;
+                }
+                // Apply import scaling. Use generous width to prevent word-wrap:
+                // getBBox is tight to the rendered glyphs, but .note uses sans-serif
+                // which may differ from SVG's font.
+                const top = y0 * scaleY + offsetY;
+                const bottom = y1 * scaleY + offsetY;
+                const cx = ((x0 + x1) / 2) * scaleX + offsetX; // center of text
+                const halfW = (x1 - x0) * scaleX; // generous: 2x original width
+                const left = cx - halfW;
+                const right = cx + halfW;
+                const fontSize = info.fontSize * scaleY;
+                const fillColor = parseColor(info.fill);
+                const textStyle = JSON.stringify({
+                    textSize: fontSize,
+                    textBold: info.bold,
+                    textItalic: info.italic,
+                    alignType: info.align,
+                });
+                strokes.push({
+                    uuid: generateUUID(),
+                    is_text: true,
+                    text: info.text,
+                    text_style: textStyle,
+                    bounding_rect: [top, left, bottom, right],
+                    color: fillColor,
+                });
+            });
+
+            // Process ALL visual elements in document order for correct z-ordering.
+            // Native .note shapes (rect, circle, ellipse, line) and paths are interleaved
+            // in the SVG — processing them separately breaks paint order.
+            function transformPt(x, y, ctm) {
+                if (ctm) return [x*ctm.a + y*ctm.c + ctm.e, x*ctm.b + y*ctm.d + ctm.f];
+                return [x, y];
+            }
+            function scalePt(x, y) {
+                return { x: x*scaleX + offsetX, y: y*scaleY + offsetY, pressure: 2048, tilt_x: 0, tilt_y: 0, cum_time: 0 };
+            }
+            svgEl.querySelectorAll('path, rect, circle, ellipse, line').forEach(el => {
+                const tag = el.tagName.toLowerCase();
+                const style = window.getComputedStyle(el);
+                const ctm = el.getCTM();
+                const rawStroke = el.getAttribute('stroke') || style.stroke;
+                const rawFill = el.getAttribute('fill');
+                const effectiveFill = rawFill !== null ? rawFill : (style.fill || 'black');
+                const hasStroke = rawStroke && rawStroke !== 'none';
+                const hasFill = effectiveFill && effectiveFill !== 'none';
+                if (!hasStroke && !hasFill) return;
+
+                if (tag === 'path') {
+                    // Path: sample points along the path
+                    const len = el.getTotalLength();
+                    if (len === 0) return;
+                    const pts = [];
+                    const step = 0.5;
+                    for (let i = 0; i <= len; i += step) {
+                        const p = el.getPointAtLength(i);
+                        let x = p.x, y = p.y;
+                        if (ctm) {
+                            x = p.x * ctm.a + p.y * ctm.c + ctm.e;
+                            y = p.x * ctm.b + p.y * ctm.d + ctm.f;
+                        }
+                        pts.push({ x: x*scaleX + offsetX, y: y*scaleY + offsetY,
+                            pressure: 2048, tilt_x: 0, tilt_y: 0, cum_time: i * 5 });
+                    }
+                    if (hasFill) {
+                        const fillColor = parseColor(effectiveFill);
+                        const outlineColor = hasStroke ? parseColor(rawStroke) : fillColor;
+                        strokes.push({ uuid: generateUUID(), pen_type: 17, thickness: 1.0,
+                            color: outlineColor, fill_color: fillColor, is_fill: true,
+                            points: pts });
+                    }
+                    if (hasStroke) {
+                        const strokeColor = parseColor(rawStroke);
+                        let thickness = parseFloat(el.getAttribute('stroke-width') || style.strokeWidth || '3');
+                        if (isNaN(thickness)) thickness = 3;
+                        strokes.push({ uuid: generateUUID(), pen_type: 2,
+                            thickness: Math.max(1, thickness * scaleX), color: strokeColor, points: pts });
+                    }
+                } else {
+                    // Native .note shapes: rect, circle, ellipse, line
+                    const strokeColor = hasStroke ? parseColor(rawStroke) : parseColor(effectiveFill);
+                    const fillColor = hasFill ? parseColor(effectiveFill) : null;
+                    let thickness = parseFloat(el.getAttribute('stroke-width') || style.strokeWidth || '1');
+                    if (isNaN(thickness)) thickness = 1;
+                    const ctmScale = ctm ? Math.sqrt(ctm.a * ctm.a + ctm.b * ctm.b) : 1;
+                    thickness = thickness * ctmScale;
+
+                    if (tag === 'rect') {
+                        const x = parseFloat(el.getAttribute('x')||0), y = parseFloat(el.getAttribute('y')||0);
+                        const w = parseFloat(el.getAttribute('width')||0), h = parseFloat(el.getAttribute('height')||0);
+                        if (w <= 0 || h <= 0) return;
+                        const [x0,y0] = transformPt(x, y, ctm);
+                        const [x1,y1] = transformPt(x+w, y+h, ctm);
+                        strokes.push({ uuid: generateUUID(), pen_type: 1, thickness: Math.max(1, thickness * scaleX),
+                            color: strokeColor, fill_color: fillColor, is_fill: true,
+                            points: [scalePt(x0,y0), scalePt(x1,y1)] });
+                    } else if (tag === 'circle' || tag === 'ellipse') {
+                        const cx = parseFloat(el.getAttribute('cx')||0), cy = parseFloat(el.getAttribute('cy')||0);
+                        const rx = parseFloat(el.getAttribute(tag==='circle'?'r':'rx')||0);
+                        const ry = parseFloat(el.getAttribute(tag==='circle'?'r':'ry')||0);
+                        if (rx <= 0 || ry <= 0) return;
+                        const [x0,y0] = transformPt(cx-rx, cy-ry, ctm);
+                        const [x1,y1] = transformPt(cx+rx, cy+ry, ctm);
+                        strokes.push({ uuid: generateUUID(), pen_type: 0, thickness: Math.max(1, thickness * scaleX),
+                            color: strokeColor, fill_color: fillColor, is_fill: true,
+                            points: [scalePt(x0,y0), scalePt(x1,y1)] });
+                    } else if (tag === 'line') {
+                        const [x0,y0] = transformPt(parseFloat(el.getAttribute('x1')||0), parseFloat(el.getAttribute('y1')||0), ctm);
+                        const [x1,y1] = transformPt(parseFloat(el.getAttribute('x2')||0), parseFloat(el.getAttribute('y2')||0), ctm);
+                        strokes.push({ uuid: generateUUID(), pen_type: 7, thickness: Math.max(1, thickness * scaleX),
+                            color: strokeColor, is_fill: true, points: [scalePt(x0,y0), scalePt(x1,y1)] });
+                    }
+                }
+            });
+
+            document.body.removeChild(div);
+
+            try {
+                app.clear_strokes(page);
+                app.add_svg_strokes(page, JSON.stringify(strokes));
+
+                // Set originalFileSize to the .note size with SVG data before optimization
+                try { originalFileSize = app.export().length; } catch(e) {}
+
+                ui.optResults.innerHTML = `<span class="text-green-600 font-bold">Successfully imported ${strokes.length} vector paths!</span>`;
+
+                clearTimeout(debounceTimer);
+                debouncedProcess();
+            } catch (e) {
+                alert("Failed to inject SVG strokes: " + e);
+            }
+        }
+
+        // Test hook: calls the real handleSvgImport so tests exercise actual app code.
+        // Resets app state between calls so each SVG is tested in isolation.
+        window._testImportSVG = async (svgText) => {
+            if (app) { try { app.free(); } catch(e) {} app = null; }
+            const file = new File([svgText], 'test.svg', { type: 'image/svg+xml' });
+            await handleSvgImport(file);
+            const c = ui.cOrig;
+            app.render_page(c, false, page);
+            return { url: c.toDataURL('image/png'), width: c.width, height: c.height };
+        };
+
         const loadFile = async (file) => {
-            if (!file || !file.name.endsWith('.note')) return alert('Please upload a valid .note file');
-            filename = file.name.replace('.note', '');
+            if (!file) return;
+            filename = file.name.replace('.note', '').replace('.svg', '');
             originalFileSize = file.size;
-            fileSource = { type: 'local' };
+            fileSource = { type: 'local', name: file.name };
             localFileRef = file;
             saveFileSource({ type: 'local', name: file.name });
+
+            if (file.name.endsWith('.svg') || file.type === 'image/svg+xml') {
+                if (!confirm("SVG import is experimental with limited support. Shapes, paths, and text are supported.\n\nGradients, filters, clipping, and CSS styling are not supported.\n\nContinue?")) return;
+                await handleSvgImport(file);
+                return;
+            }
+            if (!file.name.endsWith('.note')) return alert('Please upload a valid .note or .svg file');
             try { await loadBuffer(new Uint8Array(await file.arrayBuffer())); }
             catch (err) { alert("Corrupted .note file format: " + err); }
         };
@@ -1091,7 +1630,7 @@
         async function debouncedProcess() {
             clearTimeout(debounceTimer);
 
-            [ui.btnShareNote, ui.btnDlNote, ui.btnDlNoteIcon, ui.btnOptPdf, ui.btnOptSvg, ui.btnLoadPreview, ui.btnShareDirect, ui.btnDlDirect, ui.btnDlDirectIcon].forEach(b => { if(b) b.disabled = true; });
+            [ui.btnShareNote, ui.btnDlNote, ui.btnDlNoteIcon, ui.btnLoadPreview, ui.btnShareDirect, ui.btnDlDirect, ui.btnDlDirectIcon].forEach(b => { if(b) b.disabled = true; });
             if (canShare) {
                 ui.btnShareNote.innerText = "Optimizing...";
                 ui.btnShareDirect.innerText = "Optimizing...";
@@ -1150,16 +1689,21 @@
                     }
                     ui.btnLoadPreview.disabled = false;
 
+                    // Always render canvases (preview is always visible now)
+                    previewEnabled = true;
+                    renderCanvases();
+                    fitToScreen();
+
                     if (ui.chkAutoOpen.checked && window.Android && fileSource && fileSource.type !== 'demo') {
                         shareOptimizedFile();
-                    } else if (previewEnabled) {
-                        ui.btnOptPdf.disabled = false;
-                        ui.btnOptSvg.disabled = false;
-                        ui.exportVisualsHint.classList.add('hidden');
-                        renderCanvases();
-                        fitToScreen();
-                    } else if (ui.chkAutoPreview.checked) {
-                        enterPreview(false);
+                    } else if (!ui.previewOverlay.classList.contains('hidden')) {
+                        // Overlay is showing — enable its buttons, keep export buttons disabled
+                        ui.btnOverlayDl.disabled = false;
+                        ui.btnOverlayShare.disabled = false;
+                        if (canShare) {
+                            ui.btnOverlayShare.classList.remove('hidden');
+                            ui.btnOverlayDl.classList.add('hidden');
+                        }
                     }
                 } catch (e) {
                     ui.optResults.innerHTML = '<span class="text-red-500 font-bold">Error during optimization.</span>';
@@ -1169,17 +1713,99 @@
             }, 50);
         }
 
+        // Kaleido 3 E-Ink Simulator (Boox Note Air 3C / 5C Frontlight Edition)
+        // Accurately models CFA desaturation, frontlight washout, warm tint, and hardware dithering.
+        function applyKaleido3(canvas) {
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            const width = canvas.width;
+            const height = canvas.height;
+            const img = ctx.getImageData(0, 0, width, height);
+            const d = img.data;
+
+            // 1. Precalculate 4x4 Bayer matrix for ordered dithering.
+            // Dithering is the "secret sauce" for e-ink realism. It prevents flat, ugly digital banding 
+            // and perfectly replicates the grainy physical texture of the Color Filter Array (CFA).
+            const bayerBase = [
+                0,  8,  2, 10,
+                12,  4, 14,  6,
+                3, 11,  1,  9,
+                15,  7, 13,  5
+            ];
+            
+            // Map Bayer 0-15 to half-step intervals of our 17-value quantization step
+            const bayer = new Float32Array(16);
+            for (let i = 0; i < 16; i++) {
+                bayer[i] = (bayerBase[i] / 16.0 - 0.5) * 17;
+            }
+
+            // 2. Kaleido 3 Optical & Frontlight Characteristics (tuned for Note Air 5C)
+            const SATURATION = 0.42; // CFA absorbs light; colors are muted but not washed out
+            const BLACK_LIFT = 40;   // Frontlight scatters, washing deep blacks into slate gray
+            const WHITE_DROP = 240;  // Paper base isn't pure #FFF, even with the frontlight on
+            const CONTRAST = (WHITE_DROP - BLACK_LIFT) / 255.0;
+
+            // Fast coordinate trackers for the Bayer grid
+            let x = 0;
+            let y = 0;
+
+            for (let i = 0; i < d.length; i += 4) {
+                let r = d[i], g = d[i+1], b = d[i+2];
+
+                // --- A. Desaturate (Preserve Perceptual Luminance) ---
+                // Kaleido's CFA layer severely limits color vibrancy.
+                const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                r = lum + (r - lum) * SATURATION;
+                g = lum + (g - lum) * SATURATION;
+                b = lum + (b - lum) * SATURATION;
+
+                // --- B. Frontlight Tone Curve (Compress Dynamic Range) ---
+                // Simulates physical light bouncing around the optical layers and microcapsules
+                r = BLACK_LIFT + (r * CONTRAST);
+                g = BLACK_LIFT + (g * CONTRAST);
+                b = BLACK_LIFT + (b * CONTRAST);
+
+                // --- C. Subtle Dithering (E-ink Grain) ---
+                // Mild noise to approximate CFA subpixel structure without visible grid
+                const dither = bayer[(y & 3) * 4 + (x & 3)] * 0.5;
+                r += dither;
+                g += dither;
+                b += dither;
+
+                // --- E. Quantize to 4 bits per channel (4096 colors) ---
+                // 16 color steps per channel = 255 / 15 = 17
+                // (Note: Canvas Uint8ClampedArray natively clamps values < 0 and > 255 automatically, 
+                //  removing the need for slow Math.min/max bounds checking in JavaScript).
+                d[i]   = Math.round(r / 17) * 17;
+                d[i+1] = Math.round(g / 17) * 17;
+                d[i+2] = Math.round(b / 17) * 17;
+                // d[i+3] is alpha, left completely untouched.
+
+                // Fast X/Y coordinate tracking for the Bayer matrix
+                x++;
+                if (x === width) {
+                    x = 0;
+                    y++;
+                }
+            }
+
+            ctx.putImageData(img, 0, 0);
+        }
+
         function renderCanvases() {
             if(!app || !previewEnabled) return;
             if(comparisonMode) app.render_page(ui.cOrig, false, page);
             app.render_page(ui.cDeb, true, page);
+            if (ui.chkKaleido.checked) {
+                if(comparisonMode) applyKaleido3(ui.cOrig);
+                applyKaleido3(ui.cDeb);
+            }
         }
 
         document.getElementById('btnPrev').onclick = () => { if(page > 0) { page--; ui.pageText.innerText = `Pg ${page + 1}/${app.get_page_count()}`; renderCanvases(); } };
         document.getElementById('btnNext').onclick = () => { if(app && page < app.get_page_count()-1) { page++; ui.pageText.innerText = `Pg ${page + 1}/${app.get_page_count()}`; renderCanvases(); } };
 
-        ui.btnDlNote.onclick = () => { if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), exportName()); };
-        ui.btnDlNoteIcon.onclick = () => { if(optimizedBlob) downloadUrl(URL.createObjectURL(optimizedBlob), exportName()); };
+        ui.btnDlNote.onclick = downloadOptimized;
+        ui.btnDlNoteIcon.onclick = downloadOptimized;
 
         ui.btnOptPdf.onclick = async () => {
             if(!app || !previewEnabled) return;
@@ -1192,6 +1818,7 @@
             let pdf = null;
             for (let i = 0; i < n; i++) {
                 app.render_page(tmp, true, i);
+                if (ui.chkKaleido.checked) applyKaleido3(tmp);
                 const imgData = tmp.toDataURL('image/jpeg', 0.85);
                 if (i === 0) {
                     pdf = new jsPDF({ orientation: w > h ? 'l' : 'p', unit: 'px', format: [w, h] });
@@ -1203,232 +1830,250 @@
             if (pdf) pdf.save(exportName().replace('.note', '.pdf'));
         };
 
-        // --- EXPORT TO SVG LOGIC ---
+        // --- SVG GENERATION (shared by SVG export + Edit Online) ---
+        function kaleidoColor(color) {
+            // Apply Kaleido e-ink color transform to a CSS color string
+            const tmp = document.createElement('canvas');
+            tmp.width = 1; tmp.height = 1;
+            const ctx = tmp.getContext('2d');
+            ctx.fillStyle = color;
+            ctx.fillRect(0, 0, 1, 1);
+            let [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+            const SAT = 0.42, BL = 40, C = (240 - BL) / 255.0;
+            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+            r = Math.round((BL + (lum + (r - lum) * SAT) * C) / 17) * 17;
+            g = Math.round((BL + (lum + (g - lum) * SAT) * C) / 17) * 17;
+            b = Math.round((BL + (lum + (b - lum) * SAT) * C) / 17) * 17;
+            r = Math.max(0, Math.min(255, r));
+            g = Math.max(0, Math.min(255, g));
+            b = Math.max(0, Math.min(255, b));
+            if (a < 255) return `rgba(${r},${g},${b},${(a/255).toFixed(3)})`;
+            return `rgb(${r},${g},${b})`;
+        }
+
+        async function generateSVG() {
+            const w = app.get_canvas_width();
+            const h = app.get_canvas_height();
+            const useKaleido = ui.chkKaleido.checked;
+
+            class SVGTracker {
+                constructor(w, h) {
+                    this.w = w; this.h = h;
+                    this.elements = [];
+                    this.defs = [];
+                    this.path = "";
+                    this.state = {};
+                    this.stack = [];
+                    this.pendingImages = [];
+                }
+
+                _parseColor(color) {
+                    if (!color) return { c: "none", o: 1 };
+                    if (typeof color === 'string' && color.startsWith('rgba')) {
+                        const m = color.match(/rgba\(([^,]+),([^,]+),([^,]+),([^)]+)\)/);
+                        if (m) return { c: `rgb(${m[1]},${m[2]},${m[3]})`, o: parseFloat(m[4]) };
+                    }
+                    return { c: color, o: 1 };
+                }
+
+                _style(type) {
+                    const c = type === 'fill' ? this.state.fillStyle : this.state.strokeStyle;
+                    const pc = this._parseColor(c);
+                    let s = `opacity="${pc.o * this.state.globalAlpha}"`;
+
+                    const t = this.state.transform;
+                    if (t && t.join(',') !== '1,0,0,1,0,0') {
+                        s += ` transform="matrix(${t.join(' ')})"`;
+                    }
+                    if (this.state.globalCompositeOperation === 'darken') {
+                        s += ' style="mix-blend-mode: darken;"';
+                    }
+
+                    if (type === 'fill') {
+                        s += ` fill="${pc.c}"`;
+                    } else {
+                        s += ` fill="none" stroke="${pc.c}" stroke-width="${this.state.lineWidth}" stroke-linecap="${this.state.lineCap}" stroke-linejoin="${this.state.lineJoin}"`;
+                        if (this.state.lineDash && this.state.lineDash.length > 0) s += ` stroke-dasharray="${this.state.lineDash.join(',')}"`;
+                    }
+                    return s;
+                }
+
+                save() { this.stack.push(JSON.parse(JSON.stringify(this.state))); this.elements.push('<g>'); }
+                restore() { if (this.stack.length > 0) this.state = this.stack.pop(); this.elements.push('</g>'); }
+                setTransform(a,b,c,d,e,f) { this.state.transform = [a,b,c,d,e,f]; }
+                clearRect(x,y,w,h) {}
+                fillRect(x,y,w,h) { this.elements.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" ${this._style('fill')} />`); }
+                strokeRect(x,y,w,h) { this.elements.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" ${this._style('stroke')} />`); }
+                beginPath() { this.path = ""; }
+                moveTo(x,y) { this.path += `M ${x} ${y} `; }
+                lineTo(x,y) { this.path += `L ${x} ${y} `; }
+                quadraticCurveTo(cx,cy,x,y) { this.path += `Q ${cx} ${cy} ${x} ${y} `; }
+                bezierCurveTo(c1x,c1y,c2x,c2y,x,y) { this.path += `C ${c1x} ${c1y} ${c2x} ${c2y} ${x} ${y} `; }
+                closePath() { if (this.path !== "") this.path += "Z "; }
+
+                ellipse(cx, cy, rx, ry, rot, startAngle, endAngle) {
+                    if (rx === 0 || ry === 0) return;
+                    if (Math.abs(endAngle - startAngle) >= Math.PI * 1.99) {
+                        const x1 = cx - Math.cos(rot)*rx; const y1 = cy - Math.sin(rot)*rx;
+                        const x2 = cx + Math.cos(rot)*rx; const y2 = cy + Math.sin(rot)*rx;
+                        this.path += `M ${x1} ${y1} A ${rx} ${ry} ${(rot * 180 / Math.PI)} 1 0 ${x2} ${y2} A ${rx} ${ry} ${(rot * 180 / Math.PI)} 1 0 ${x1} ${y1} `;
+                    }
+                }
+
+                arc(x, y, r, sa, ea, anticlockwise) {
+                    if (r === 0) return;
+                    if (Math.abs(ea - sa) >= Math.PI * 1.99) {
+                        this.path += `M ${x-r} ${y} A ${r} ${r} 0 1 0 ${x+r} ${y} A ${r} ${r} 0 1 0 ${x-r} ${y} `;
+                    } else {
+                        const sx = x + r * Math.cos(sa); const sy = y + r * Math.sin(sa);
+                        const ex = x + r * Math.cos(ea); const ey = y + r * Math.sin(ea);
+                        let drawn = anticlockwise ? sa - ea : ea - sa;
+                        while (drawn < 0) drawn += 2 * Math.PI;
+                        while (drawn >= 2 * Math.PI) drawn -= 2 * Math.PI;
+                        const largeArc = drawn > Math.PI ? 1 : 0;
+                        const sweep = anticlockwise ? 0 : 1;
+                        if (this.path === "") this.path += `M ${sx} ${sy} `; else this.path += `L ${sx} ${sy} `;
+                        this.path += `A ${r} ${r} 0 ${largeArc} ${sweep} ${ex} ${ey} `;
+                    }
+                }
+
+                rect(x,y,w,h) { this.path += `M ${x} ${y} L ${x+w} ${y} L ${x+w} ${y+h} L ${x} ${y+h} Z `; }
+                fill(p) { const d = p && p.__svgStr ? p.__svgStr : this.path; if(d) this.elements.push(`<path d="${d}" ${this._style('fill')} />`); }
+                stroke(p) { const d = p && p.__svgStr ? p.__svgStr : this.path; if(d) this.elements.push(`<path d="${d}" ${this._style('stroke')} />`); }
+
+                fillText(text, x, y) {
+                    let dy = "0";
+                    if (this.state.textBaseline === "top") dy = "0.8em";
+                    else if (this.state.textBaseline === "middle") dy = "0.3em";
+                    else if (this.state.textBaseline === "bottom") dy = "-0.2em";
+                    let align = "start";
+                    if (this.state.textAlign === "center") align = "middle";
+                    if (this.state.textAlign === "right") align = "end";
+                    this.elements.push(`<text x="${x}" y="${y}" dy="${dy}" style="font: ${this.state.font};" text-anchor="${align}" ${this._style('fill')}>${text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</text>`);
+                }
+
+                setLineDash(d) { this.state.lineDash = d ? Array.from(d) : []; }
+
+                drawImage(img, x, y, w, h) {
+                    const placeholder = `__IMG_${this.pendingImages.length}__`;
+                    this.pendingImages.push({ src: img.src, naturalWidth: img.naturalWidth || img.width, naturalHeight: img.naturalHeight || img.height });
+                    this.elements.push(`<image href="${placeholder}" x="${x}" y="${y}" width="${w}" height="${h}" opacity="${this.state.globalAlpha}" transform="matrix(${this.state.transform.join(' ')})" preserveAspectRatio="none" />`);
+                }
+
+                createPattern(canvas, rep) {
+                    const id = "pattern_" + Math.random().toString(36).substr(2, 9);
+                    this.defs.push(`<pattern id="${id}" width="${canvas.width}" height="${canvas.height}" patternUnits="userSpaceOnUse"><image href="${canvas.toDataURL()}" width="${canvas.width}" height="${canvas.height}" /></pattern>`);
+                    return { __svgId: id };
+                }
+
+                async getSVG() {
+                    let body = this.elements.join('\n');
+                    for (let i = 0; i < this.pendingImages.length; i++) {
+                        const pi = this.pendingImages[i];
+                        let dataUri = pi.src;
+                        if (!dataUri.startsWith('data:')) {
+                            try {
+                                const resp = await fetch(pi.src);
+                                const blob = await resp.blob();
+                                const mime = blob.type || 'image/png';
+                                if (mime === 'image/svg+xml') {
+                                    const text = await blob.text();
+                                    dataUri = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(text)));
+                                } else {
+                                    dataUri = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
+                                }
+                            } catch(e) {
+                                // Fallback: try canvas rasterization
+                                try {
+                                    const c = document.createElement('canvas');
+                                    c.width = pi.naturalWidth; c.height = pi.naturalHeight;
+                                    const img = new Image(); img.crossOrigin = 'anonymous'; img.src = pi.src;
+                                    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+                                    c.getContext('2d').drawImage(img, 0, 0);
+                                    dataUri = c.toDataURL('image/png');
+                                } catch(e2) {}
+                            }
+                        }
+                        body = body.replace(`__IMG_${i}__`, dataUri);
+                    }
+                    return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${this.w}" height="${this.h}" viewBox="0 0 ${this.w} ${this.h}">\n<defs>\n${this.defs.join('\n')}\n</defs>\n${body}\n</svg>`;
+                }
+            }
+
+            const tmp = document.createElement('canvas');
+            tmp.width = w; tmp.height = h;
+            const realCtx = tmp.getContext('2d');
+
+            if (!window.__origPath2D) {
+                window.__origPath2D = window.Path2D;
+                window.Path2D = function(pathStr) {
+                    const p = new window.__origPath2D(pathStr);
+                    p.__svgStr = pathStr;
+                    return p;
+                };
+            }
+
+            const tracker = new SVGTracker(w, h);
+
+            const proxy = new Proxy(realCtx, {
+                get(target, prop) {
+                    if (typeof target[prop] === 'function') {
+                        return function(...args) {
+                            let svgRes;
+                            if (typeof tracker[prop] === 'function') {
+                                svgRes = tracker[prop].apply(tracker, args);
+                            }
+                            const res = target[prop].apply(target, args);
+                            if (prop === 'createPattern' && svgRes) res.__svgId = svgRes.__svgId;
+                            return res;
+                        };
+                    }
+                    if (prop in tracker.state) return tracker.state[prop];
+                    return target[prop];
+                },
+                set(target, prop, value) {
+                    if (prop in tracker.state) {
+                        if (prop === 'fillStyle' && value && value.__svgId) {
+                            tracker.state[prop] = `url(#${value.__svgId})`;
+                        } else if (useKaleido && (prop === 'fillStyle' || prop === 'strokeStyle') && typeof value === 'string') {
+                            tracker.state[prop] = kaleidoColor(value);
+                        } else tracker.state[prop] = value;
+                    }
+                    target[prop] = value;
+                    return true;
+                }
+            });
+
+            const origGetContext = tmp.getContext;
+            tmp.getContext = function(type, ...args) {
+                if (type === '2d') return proxy;
+                return origGetContext.call(this, type, ...args);
+            };
+
+            tracker.state = {
+                fillStyle: "#000000", strokeStyle: "#000000", lineWidth: 1, lineCap: "butt",
+                lineJoin: "miter", globalAlpha: 1, transform: [1,0,0,1,0,0],
+                font: "10px sans-serif", textAlign: "start", textBaseline: "alphabetic",
+                globalCompositeOperation: "source-over", lineDash: []
+            };
+
+            app.render_page(tmp, true, page);
+            return await tracker.getSVG();
+        }
+
+        // --- EXPORT TO SVG ---
         ui.btnOptSvg.onclick = async () => {
             if(!app || !previewEnabled) return;
             const ogHTML = ui.btnOptSvg.innerHTML;
             ui.btnOptSvg.innerHTML = "Generating SVG...";
             ui.btnOptSvg.disabled = true;
-
-            // Yield thread briefly to let the browser update the button text
             await new Promise(r => setTimeout(r, 50));
-
             try {
-                const w = app.get_canvas_width();
-                const h = app.get_canvas_height();
-
-                class SVGTracker {
-                    constructor(w, h) {
-                        this.w = w; this.h = h;
-                        this.elements = [];
-                        this.defs = [];
-                        this.path = "";
-                        this.state = {};
-                        this.stack = [];
-                        this.pendingImages = [];
-                    }
-                    
-                    _parseColor(color) {
-                        if (!color) return { c: "none", o: 1 };
-                        if (typeof color === 'string' && color.startsWith('rgba')) {
-                            const m = color.match(/rgba\(([^,]+),([^,]+),([^,]+),([^)]+)\)/);
-                            if (m) return { c: `rgb(${m[1]},${m[2]},${m[3]})`, o: parseFloat(m[4]) };
-                        }
-                        return { c: color, o: 1 };
-                    }
-                    
-                    _style(type) {
-                        const c = type === 'fill' ? this.state.fillStyle : this.state.strokeStyle;
-                        const pc = this._parseColor(c);
-                        let s = `opacity="${pc.o * this.state.globalAlpha}"`;
-                        
-                        const t = this.state.transform;
-                        if (t && t.join(',') !== '1,0,0,1,0,0') {
-                            s += ` transform="matrix(${t.join(' ')})"`;
-                        }
-                        if (this.state.globalCompositeOperation === 'darken') {
-                            s += ' style="mix-blend-mode: darken;"';
-                        }
-                        
-                        if (type === 'fill') {
-                            s += ` fill="${pc.c}"`;
-                        } else {
-                            s += ` fill="none" stroke="${pc.c}" stroke-width="${this.state.lineWidth}" stroke-linecap="${this.state.lineCap}" stroke-linejoin="${this.state.lineJoin}"`;
-                            if (this.state.lineDash && this.state.lineDash.length > 0) s += ` stroke-dasharray="${this.state.lineDash.join(',')}"`;
-                        }
-                        return s;
-                    }
-
-                    save() { this.stack.push(JSON.parse(JSON.stringify(this.state))); this.elements.push('<g>'); }
-                    restore() { if (this.stack.length > 0) this.state = this.stack.pop(); this.elements.push('</g>'); }
-                    setTransform(a,b,c,d,e,f) { this.state.transform = [a,b,c,d,e,f]; }
-                    clearRect(x,y,w,h) {}
-                    fillRect(x,y,w,h) { this.elements.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" ${this._style('fill')} />`); }
-                    strokeRect(x,y,w,h) { this.elements.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" ${this._style('stroke')} />`); }
-                    beginPath() { this.path = ""; }
-                    moveTo(x,y) { this.path += `M ${x} ${y} `; }
-                    lineTo(x,y) { this.path += `L ${x} ${y} `; }
-                    quadraticCurveTo(cx,cy,x,y) { this.path += `Q ${cx} ${cy} ${x} ${y} `; }
-                    bezierCurveTo(c1x,c1y,c2x,c2y,x,y) { this.path += `C ${c1x} ${c1y} ${c2x} ${c2y} ${x} ${y} `; }
-                    closePath() { if (this.path !== "") this.path += "Z "; }
-                    
-                    ellipse(cx, cy, rx, ry, rot, startAngle, endAngle) {
-                        if (rx === 0 || ry === 0) return;
-                        if (Math.abs(endAngle - startAngle) >= Math.PI * 1.99) {
-                            const x1 = cx - Math.cos(rot)*rx; const y1 = cy - Math.sin(rot)*rx;
-                            const x2 = cx + Math.cos(rot)*rx; const y2 = cy + Math.sin(rot)*rx;
-                            this.path += `M ${x1} ${y1} A ${rx} ${ry} ${(rot * 180 / Math.PI)} 1 0 ${x2} ${y2} A ${rx} ${ry} ${(rot * 180 / Math.PI)} 1 0 ${x1} ${y1} `;
-                        }
-                    }
-                    
-                    arc(x, y, r, sa, ea, anticlockwise) {
-                        if (r === 0) return;
-                        if (Math.abs(ea - sa) >= Math.PI * 1.99) {
-                            this.path += `M ${x-r} ${y} A ${r} ${r} 0 1 0 ${x+r} ${y} A ${r} ${r} 0 1 0 ${x-r} ${y} `;
-                        } else {
-                            const sx = x + r * Math.cos(sa); const sy = y + r * Math.sin(sa);
-                            const ex = x + r * Math.cos(ea); const ey = y + r * Math.sin(ea);
-                            let drawn = anticlockwise ? sa - ea : ea - sa;
-                            while (drawn < 0) drawn += 2 * Math.PI;
-                            while (drawn >= 2 * Math.PI) drawn -= 2 * Math.PI;
-                            const largeArc = drawn > Math.PI ? 1 : 0;
-                            const sweep = anticlockwise ? 0 : 1;
-                            if (this.path === "") this.path += `M ${sx} ${sy} `; else this.path += `L ${sx} ${sy} `;
-                            this.path += `A ${r} ${r} 0 ${largeArc} ${sweep} ${ex} ${ey} `;
-                        }
-                    }
-                    
-                    rect(x,y,w,h) { this.path += `M ${x} ${y} L ${x+w} ${y} L ${x+w} ${y+h} L ${x} ${y+h} Z `; }
-                    fill(p) { const d = p && p.__svgStr ? p.__svgStr : this.path; if(d) this.elements.push(`<path d="${d}" ${this._style('fill')} />`); }
-                    stroke(p) { const d = p && p.__svgStr ? p.__svgStr : this.path; if(d) this.elements.push(`<path d="${d}" ${this._style('stroke')} />`); }
-                    
-                    fillText(text, x, y) {
-                        let dy = "0";
-                        if (this.state.textBaseline === "top") dy = "0.8em";
-                        else if (this.state.textBaseline === "middle") dy = "0.3em";
-                        else if (this.state.textBaseline === "bottom") dy = "-0.2em";
-                        let align = "start";
-                        if (this.state.textAlign === "center") align = "middle";
-                        if (this.state.textAlign === "right") align = "end";
-                        this.elements.push(`<text x="${x}" y="${y}" dy="${dy}" style="font: ${this.state.font};" text-anchor="${align}" ${this._style('fill')}>${text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</text>`);
-                    }
-                    
-                    setLineDash(d) { this.state.lineDash = d ? Array.from(d) : []; }
-                    
-                    drawImage(img, x, y, w, h) {
-                        const placeholder = `__IMG_${this.pendingImages.length}__`;
-                        this.pendingImages.push({ src: img.src, naturalWidth: img.naturalWidth || img.width, naturalHeight: img.naturalHeight || img.height });
-                        this.elements.push(`<image href="${placeholder}" x="${x}" y="${y}" width="${w}" height="${h}" opacity="${this.state.globalAlpha}" transform="matrix(${this.state.transform.join(' ')})" preserveAspectRatio="none" />`);
-                    }
-                    
-                    createPattern(canvas, rep) {
-                        const id = "pattern_" + Math.random().toString(36).substr(2, 9);
-                        this.defs.push(`<pattern id="${id}" width="${canvas.width}" height="${canvas.height}" patternUnits="userSpaceOnUse"><image href="${canvas.toDataURL()}" width="${canvas.width}" height="${canvas.height}" /></pattern>`);
-                        return { __svgId: id };
-                    }
-                    
-                    async getSVG() {
-                        let body = this.elements.join('\n');
-                        for (let i = 0; i < this.pendingImages.length; i++) {
-                            const pi = this.pendingImages[i];
-                            let dataUri = pi.src;
-                            if (!dataUri.startsWith('data:')) {
-                                try {
-                                    const resp = await fetch(pi.src);
-                                    const blob = await resp.blob();
-                                    const mime = blob.type || 'image/png';
-                                    if (mime === 'image/svg+xml') {
-                                        const text = await blob.text();
-                                        dataUri = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(text)));
-                                    } else {
-                                        dataUri = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
-                                    }
-                                } catch(e) {
-                                    // Fallback: try canvas rasterization
-                                    try {
-                                        const c = document.createElement('canvas');
-                                        c.width = pi.naturalWidth; c.height = pi.naturalHeight;
-                                        const img = new Image(); img.crossOrigin = 'anonymous'; img.src = pi.src;
-                                        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
-                                        c.getContext('2d').drawImage(img, 0, 0);
-                                        dataUri = c.toDataURL('image/png');
-                                    } catch(e2) {}
-                                }
-                            }
-                            body = body.replace(`__IMG_${i}__`, dataUri);
-                        }
-                        return `<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${this.w}" height="${this.h}" viewBox="0 0 ${this.w} ${this.h}">\n<defs>\n${this.defs.join('\n')}\n</defs>\n${body}\n</svg>`;
-                    }
-                }
-
-                const tmp = document.createElement('canvas');
-                tmp.width = w; tmp.height = h;
-                const realCtx = tmp.getContext('2d');
-                
-                // Allow WASM Path2D instantiations to leak the raw string command path natively.
-                if (!window.__origPath2D) {
-                    window.__origPath2D = window.Path2D;
-                    window.Path2D = function(pathStr) {
-                        const p = new window.__origPath2D(pathStr);
-                        p.__svgStr = pathStr;
-                        return p;
-                    };
-                }
-
-                const tracker = new SVGTracker(w, h);
-                
-                // Pass instance type-checks but lazily duplicate and delegate hardware vector drawing to SVG tracker
-                const proxy = new Proxy(realCtx, {
-                    get(target, prop) {
-                        if (typeof target[prop] === 'function') {
-                            return function(...args) {
-                                let svgRes;
-                                if (typeof tracker[prop] === 'function') {
-                                    svgRes = tracker[prop].apply(tracker, args);
-                                }
-                                const res = target[prop].apply(target, args);
-                                if (prop === 'createPattern' && svgRes) res.__svgId = svgRes.__svgId;
-                                return res;
-                            };
-                        }
-                        if (prop in tracker.state) return tracker.state[prop];
-                        return target[prop];
-                    },
-                    set(target, prop, value) {
-                        if (prop in tracker.state) {
-                            if (prop === 'fillStyle' && value && value.__svgId) {
-                                tracker.state[prop] = `url(#${value.__svgId})`;
-                            } else tracker.state[prop] = value;
-                        }
-                        target[prop] = value;
-                        return true;
-                    }
-                });
-                
-                const origGetContext = tmp.getContext;
-                tmp.getContext = function(type, ...args) {
-                    if (type === '2d') return proxy;
-                    return origGetContext.call(this, type, ...args);
-                };
-
-                // Seed tracker with canvas native default constraints before firing the drawing engine
-                tracker.state = {
-                    fillStyle: "#000000", strokeStyle: "#000000", lineWidth: 1, lineCap: "butt",
-                    lineJoin: "miter", globalAlpha: 1, transform: [1,0,0,1,0,0],
-                    font: "10px sans-serif", textAlign: "start", textBaseline: "alphabetic",
-                    globalCompositeOperation: "source-over", lineDash: []
-                };
-                
-                // Execute WebAssembly render on the active currently-displayed page
-                app.render_page(tmp, true, page);
-                
-                const svgStr = await tracker.getSVG();
+                const svgStr = await generateSVG();
                 const blob = new Blob([svgStr], { type: 'image/svg+xml' });
-                
                 const n = app.get_page_count();
                 const outName = exportName().replace('.note', n > 1 ? `_page${page+1}.svg` : '.svg');
                 downloadUrl(URL.createObjectURL(blob), outName);
-
             } catch (e) {
                 console.error(e);
                 alert("SVG Export failed.");
@@ -1436,6 +2081,18 @@
                 ui.btnOptSvg.innerHTML = ogHTML;
                 ui.btnOptSvg.disabled = false;
             }
+        };
+
+        // --- EDIT ONLINE (Boxy SVG) ---
+        ui.btnEditOnline.onclick = async () => {
+            if(!app || !previewEnabled) return;
+
+            const svg = await generateSVG();
+            await navigator.clipboard.writeText(svg);
+
+            if (!confirm("This will open a drawing editor in a new tab where you can edit your notes.\n\nOnce it opens, click File \u2192 New From Clipboard to load your drawing.\n\nContinue?")) return;
+
+            window.open('https://boxy-svg.com/app', '_blank');
         };
 
         })().catch(function(err) {

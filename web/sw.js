@@ -1,4 +1,4 @@
-const CACHE_NAME = 'boox-optimizer-v44';
+const CACHE_NAME = 'boox-optimizer-v47';
 
 const APP_SHELL = [
   './',
@@ -8,6 +8,7 @@ const APP_SHELL = [
   'icon-512.png',
   'pkg/boox_optimizer.js',
   'pkg/boox_optimizer_bg.wasm',
+  'empty.note',
 ];
 
 self.addEventListener('install', (event) => {
@@ -47,6 +48,12 @@ self.addEventListener('fetch', (event) => {
       }
       return Response.redirect('./', 303);
     })());
+    return;
+  }
+
+  // nocache=1 in URL: bypass all caches and fetch from network
+  if (url.searchParams.get('nocache') === '1') {
+    event.respondWith(fetch(event.request, { cache: 'no-store' }));
     return;
   }
 

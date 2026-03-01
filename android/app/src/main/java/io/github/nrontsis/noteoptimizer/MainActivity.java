@@ -106,6 +106,20 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(MainActivity.this, "Open failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
             }
         }
+
+        @JavascriptInterface
+        public void saveFile(String base64, String fileName) {
+            try {
+                byte[] data = Base64.decode(base64, Base64.DEFAULT);
+                writeToDownloads(data, fileName);
+                runOnUiThread(() ->
+                    Toast.makeText(MainActivity.this, "Saved to Downloads/Note Optimizer", Toast.LENGTH_SHORT).show());
+            } catch (Exception e) {
+                Log.e(TAG, "saveFile failed", e);
+                runOnUiThread(() ->
+                    Toast.makeText(MainActivity.this, "Save failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }
     }
 
     @Override

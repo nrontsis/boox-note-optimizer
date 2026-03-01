@@ -1,7 +1,7 @@
 use base64::Engine as _;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -50,6 +50,7 @@ pub struct ShapeMeta {
     pub text_style: Option<String>,
     pub resource_path: Option<String>,
     pub extra_json: Option<String>,
+    pub zorder: u64,  // layer ID for z-ordering (protobuf field 6)
 }
 
 impl Default for ShapeMeta {
@@ -69,6 +70,7 @@ impl Default for ShapeMeta {
             text_style: None,
             resource_path: None,
             extra_json: None,
+            zorder: 0,
         }
     }
 }
@@ -98,6 +100,15 @@ pub struct NoteFile {
     pub resources: HashMap<String, Vec<u8>>,
     pub note_background: Option<String>,
     pub templates: HashMap<String, serde_json::Value>,
+    pub page_layers: HashMap<String, Vec<u64>>,
+}
+
+/// Extract the page UUID from a note path like ".../point/PAGEUUID#strokeuuid#points".
+fn note_page_id(path: &str) -> Option<&str> {
+    let parts: Vec<&str> = path.split('/').collect();
+    parts.iter().position(|&x| x == "point")
+        .and_then(|pos| parts.get(pos + 1))
+        .map(|raw| raw.split('#').next().unwrap_or(raw))
 }
 
 impl NoteFile {
@@ -112,6 +123,7 @@ impl NoteFile {
         let mut note_background = None;
         let mut templates: HashMap<String, serde_json::Value> = HashMap::new();
         let mut page_list: Vec<String> = Vec::new();
+        let mut page_layers: HashMap<String, Vec<u64>> = HashMap::new();
 
         for i in 0..archive.len() {
             let Ok(mut file) = archive.by_index(i) else {
@@ -158,7 +170,7 @@ impl NoteFile {
             } else if name.ends_with("note_info") || name == "note_tree" {
                 let mut d = Vec::new();
                 if file.read_to_end(&mut d).is_ok() {
-                    parse_note_info(&d, &mut canvas_w, &mut canvas_h, &mut note_background, &mut page_list);
+                    parse_note_info(&d, &mut canvas_w, &mut canvas_h, &mut note_background, &mut page_list, &mut page_layers);
                 }
             } else if name.contains("resource/pb/") && !name.contains("stash") {
                 let res_key = name
@@ -192,13 +204,15 @@ impl NoteFile {
 
         // Use pageNameList from note_info if available; otherwise discover from paths
         let pages = if !page_list.is_empty() {
-            // Filter to pages that actually have content (points or shapes)
+            // Keep all pages from pageNameList, but order content pages first
             let mut known: std::collections::HashSet<String> = std::collections::HashSet::new();
             for n in &notes {
                 let parts: Vec<&str> = n.path.split('/').collect();
                 if let Some(pos) = parts.iter().position(|&x| x == "point") {
                     if pos + 1 < parts.len() {
-                        known.insert(parts[pos + 1].to_string());
+                        let raw = parts[pos + 1];
+                        let page_uuid = raw.split('#').next().unwrap_or(raw);
+                        known.insert(page_uuid.to_string());
                     }
                 }
             }
@@ -207,7 +221,8 @@ impl NoteFile {
                     known.insert(pid.clone());
                 }
             }
-            let mut ordered: Vec<String> = page_list.into_iter().filter(|p| known.contains(p)).collect();
+            // Keep all pages from the list (including empty ones, needed for SVG import)
+            let mut ordered: Vec<String> = page_list.into_iter().collect();
             // Add any known pages not in the list (shouldn't happen but be safe)
             for k in &known {
                 if !ordered.contains(k) {
@@ -220,8 +235,12 @@ impl NoteFile {
             for n in &notes {
                 let parts: Vec<&str> = n.path.split('/').collect();
                 if let Some(pos) = parts.iter().position(|&x| x == "point") {
-                    if pos + 1 < parts.len() && !pages.contains(&parts[pos + 1].to_string()) {
-                        pages.push(parts[pos + 1].to_string());
+                    if pos + 1 < parts.len() {
+                        let raw = parts[pos + 1];
+                        let page_uuid = raw.split('#').next().unwrap_or(raw).to_string();
+                        if !pages.contains(&page_uuid) {
+                            pages.push(page_uuid);
+                        }
                     }
                 }
             }
@@ -235,6 +254,12 @@ impl NoteFile {
             pages
         };
 
+        // Ensure notes has at least one entry per page (empty pages need placeholders)
+        while notes.len() < pages.len() {
+            let pid = &pages[notes.len()];
+            notes.push(Note { path: format!("point/{}/0#points", pid), header: Vec::new(), strokes: Vec::new() });
+        }
+
         Ok(NoteFile {
             pages,
             notes,
@@ -244,6 +269,7 @@ impl NoteFile {
             resources,
             note_background,
             templates,
+            page_layers,
         })
     }
 }
@@ -380,6 +406,7 @@ pub fn parse_protobuf(data: &[u8], meta: &mut HashMap<String, ShapeMeta>, page_i
             off += len;
             let (mut so, mut u, mut pt, mut th, mut c, mut mat, mut ts) =
                 (0, String::new(), 2, 3.0, (0, 0, 0, 1.0), None, 0);
+            let mut zorder: u64 = 0;
             let mut fill_c: Option<(u8, u8, u8, f32)> = None;
             let mut point_list: Vec<[f32; 2]> = Vec::new();
             let mut bounding_rect: Option<[f32; 4]> = None;
@@ -419,6 +446,9 @@ pub fn parse_protobuf(data: &[u8], meta: &mut HashMap<String, ShapeMeta>, page_i
                         th = f32::from_le_bytes(b);
                         so += 4;
                     }
+                    (6, 0) => {
+                        zorder = decode_var(msg, &mut so);
+                    }
                     (7, 2) => {
                         let l = decode_var(msg, &mut so) as usize;
                         if so + l > msg.len() {
@@ -445,7 +475,10 @@ pub fn parse_protobuf(data: &[u8], meta: &mut HashMap<String, ShapeMeta>, page_i
                         }
                         if let Ok(j) = serde_json::from_slice::<serde_json::Value>(&msg[so..so + l])
                         {
-                            if let Some(a) = j.get("values").and_then(|v| v.as_array()) {
+                            // Handle both {"values": [...]} and direct [...] formats
+                            let a = j.get("values").and_then(|v| v.as_array())
+                                .or_else(|| j.as_array());
+                            if let Some(a) = a {
                                 if a.len() >= 6 {
                                     mat = Some([
                                         a[0].as_f64().unwrap_or(1.0) as f32,
@@ -571,6 +604,7 @@ pub fn parse_protobuf(data: &[u8], meta: &mut HashMap<String, ShapeMeta>, page_i
                         text_style,
                         resource_path,
                         extra_json,
+                        zorder,
                     },
                 );
             }
@@ -594,7 +628,7 @@ pub fn parse_protobuf(data: &[u8], meta: &mut HashMap<String, ShapeMeta>, page_i
     }
 }
 
-pub fn parse_note_info(data: &[u8], w: &mut f32, h: &mut f32, bg: &mut Option<String>, page_list: &mut Vec<String>) {
+pub fn parse_note_info(data: &[u8], w: &mut f32, h: &mut f32, bg: &mut Option<String>, page_list: &mut Vec<String>, page_layers: &mut HashMap<String, Vec<u64>>) {
     let mut off = 0;
     while off < data.len() {
         let tag = decode_var(data, &mut off);
@@ -603,9 +637,31 @@ pub fn parse_note_info(data: &[u8], w: &mut f32, h: &mut f32, bg: &mut Option<St
             let l = decode_var(data, &mut off) as usize;
             let next_off = off.saturating_add(l);
             if next_off <= data.len() {
-                parse_note_info(&data[off..next_off], w, h, bg, page_list);
+                parse_note_info(&data[off..next_off], w, h, bg, page_list, page_layers);
             }
             off = next_off;
+        } else if fn_num == 12 && wt == 2 {
+            // pageInfoMap JSON with layerList
+            let l = decode_var(data, &mut off) as usize;
+            if off + l <= data.len() {
+                if let Ok(s) = std::str::from_utf8(&data[off..off + l]) {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+                        if let Some(pim) = v.get("pageInfoMap").and_then(|v| v.as_object()) {
+                            for (pid, pinfo) in pim {
+                                if let Some(ll) = pinfo.get("layerList").and_then(|v| v.as_array()) {
+                                    let layer_ids: Vec<u64> = ll.iter()
+                                        .filter_map(|layer| layer.get("id").and_then(|v| v.as_u64()))
+                                        .collect();
+                                    if !layer_ids.is_empty() {
+                                        page_layers.insert(pid.clone(), layer_ids);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            off += l;
         } else if fn_num == 13 && wt == 2 {
             let l = decode_var(data, &mut off) as usize;
             if off + l <= data.len() {
@@ -811,6 +867,87 @@ pub fn build_points(nd: &Note) -> Vec<u8> {
     res
 }
 
+fn build_shape_protobuf(
+    new_shapes: &[(Stroke, ShapeMeta)],
+    points_doc_uuid: &str,
+    shape_doc_uuid: &str,
+) -> Vec<u8> {
+    let mut result = Vec::new();
+    for (stroke, meta) in new_shapes {
+        let mut inner = Vec::new();
+
+        encode_varint(&mut inner, (1 << 3) | 2);
+        encode_varint(&mut inner, stroke.uuid.len() as u64);
+        inner.extend_from_slice(stroke.uuid.as_bytes());
+
+        encode_varint(&mut inner, (2 << 3) | 0);
+        encode_varint(&mut inner, meta.created_ts);
+
+        encode_varint(&mut inner, (3 << 3) | 0);
+        encode_varint(&mut inner, meta.created_ts);
+
+        encode_varint(&mut inner, (4 << 3) | 0);
+        let c = meta.color_rgba;
+        let color_val = ((c.3 * 255.0) as u32) << 24
+            | (c.0 as u32) << 16
+            | (c.1 as u32) << 8
+            | (c.2 as u32);
+        encode_varint(&mut inner, color_val as u64);
+
+        encode_varint(&mut inner, (5 << 3) | 5);
+        inner.extend_from_slice(&meta.thickness.to_le_bytes());
+
+        encode_varint(&mut inner, (6 << 3) | 0);
+        encode_varint(&mut inner, meta.zorder);
+
+        encode_varint(&mut inner, (12 << 3) | 0);
+        encode_varint(&mut inner, meta.pen_type as u64);
+
+        if !points_doc_uuid.is_empty() {
+            encode_varint(&mut inner, (16 << 3) | 2);
+            encode_varint(&mut inner, points_doc_uuid.len() as u64);
+            inner.extend_from_slice(points_doc_uuid.as_bytes());
+        }
+
+        if !shape_doc_uuid.is_empty() {
+            encode_varint(&mut inner, (18 << 3) | 2);
+            encode_varint(&mut inner, shape_doc_uuid.len() as u64);
+            inner.extend_from_slice(shape_doc_uuid.as_bytes());
+        }
+
+        // Field 23: fill_color (varint, ARGB)
+        if let Some(fc) = meta.fill_color {
+            encode_varint(&mut inner, (23 << 3) | 0);
+            let fc_val = ((fc.3 * 255.0) as u32) << 24
+                | (fc.0 as u32) << 16
+                | (fc.1 as u32) << 8
+                | (fc.2 as u32);
+            encode_varint(&mut inner, fc_val as u64);
+        }
+
+        // Field 25: point_list (length-delimited binary)
+        // Format: 4-byte header + 16 bytes per point (x:f32 BE, y:f32 BE, 8 zero bytes)
+        if !meta.point_list.is_empty() {
+            let pl_len = 4 + meta.point_list.len() * 16;
+            encode_varint(&mut inner, (25 << 3) | 2);
+            encode_varint(&mut inner, pl_len as u64);
+            inner.extend_from_slice(&[0u8; 4]); // header
+            for pt in &meta.point_list {
+                let mut pb = Vec::new();
+                pb.write_f32::<BigEndian>(pt[0]).unwrap();
+                pb.write_f32::<BigEndian>(pt[1]).unwrap();
+                pb.extend_from_slice(&[0u8; 8]); // padding
+                inner.extend_from_slice(&pb);
+            }
+        }
+
+        encode_varint(&mut result, (1 << 3) | 2);
+        encode_varint(&mut result, inner.len() as u64);
+        result.extend_from_slice(&inner);
+    }
+    result
+}
+
 // ── Math utilities ──
 
 pub fn smooth_angle_ema(angles: &[f32], alpha: f32) -> Vec<f32> {
@@ -938,6 +1075,8 @@ pub struct AppEngine {
     bg_images: HashMap<String, HtmlImageElement>,
     note_background: Option<String>,
     templates: HashMap<String, serde_json::Value>,  // page_id -> template JSON
+    page_layers: HashMap<String, Vec<u64>>,  // page_uuid -> [layer_id, ...] in draw order
+    new_shapes: HashMap<String, Vec<(Stroke, ShapeMeta)>>,  // page_id -> SVG-imported strokes
 }
 
 #[wasm_bindgen]
@@ -951,13 +1090,178 @@ impl AppEngine {
             pages: nf.pages, canvas_w: nf.canvas_w, canvas_h: nf.canvas_h,
             resources: nf.resources, images: HashMap::new(), bg_images: HashMap::new(),
             note_background: nf.note_background, templates: nf.templates,
+            page_layers: nf.page_layers,
+            new_shapes: HashMap::new(),
         })
     }
 
     pub fn get_canvas_width(&self) -> f32 { self.canvas_w }
     pub fn get_canvas_height(&self) -> f32 { self.canvas_h }
+    pub fn set_canvas_size(&mut self, w: f32, h: f32) { self.canvas_w = w; self.canvas_h = h; }
     pub fn prepare_debloat(&mut self) { self.deb_notes = self.notes.clone(); self.meta_overrides.clear(); }
     pub fn get_note_count(&self) -> usize { self.notes.len() }
+
+    pub fn clear_strokes(&mut self, page_idx: usize) {
+        if page_idx < self.notes.len() {
+            self.notes[page_idx].strokes.clear();
+            if page_idx < self.deb_notes.len() {
+                self.deb_notes[page_idx].strokes.clear();
+            }
+        }
+        if let Some(page_id) = self.pages.get(page_idx).cloned() {
+            self.new_shapes.remove(&page_id);
+        }
+    }
+
+    pub fn add_svg_strokes(&mut self, page_idx: usize, json_str: &str) -> Result<(), JsValue> {
+        if page_idx >= self.notes.len() {
+            return Err(JsValue::from_str("Invalid page index"));
+        }
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(json_str).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let arr = parsed
+            .as_array()
+            .ok_or_else(|| JsValue::from_str("Expected array"))?;
+
+        let page_id = self.pages.get(page_idx).cloned().unwrap_or_default();
+        let now = js_sys::Date::now() as u64;
+
+        let mut new_shapes_for_page = Vec::new();
+
+        fn parse_color_array(c: &[serde_json::Value]) -> (u8, u8, u8, f32) {
+            (
+                c.get(0).and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+                c.get(1).and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+                c.get(2).and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+                c.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32,
+            )
+        }
+
+        for (i, item) in arr.iter().enumerate() {
+            let uuid = item
+                .get("uuid")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let pen_type = item
+                .get("pen_type")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(2) as i32;
+            let thickness = item
+                .get("thickness")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(3.0) as f32;
+            let is_fill = item
+                .get("is_fill")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let mut color_rgba: (u8, u8, u8, f32) = (0, 0, 0, 1.0);
+            if let Some(c) = item.get("color").and_then(|v| v.as_array()) {
+                color_rgba = parse_color_array(c);
+            }
+
+            let mut fill_color: Option<(u8, u8, u8, f32)> = None;
+            if let Some(fc) = item.get("fill_color").and_then(|v| v.as_array()) {
+                fill_color = Some(parse_color_array(fc));
+            }
+
+            let mut points = Vec::new();
+            if let Some(pts) = item.get("points").and_then(|v| v.as_array()) {
+                for pt in pts {
+                    let x = pt.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    let y = pt.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    let pressure =
+                        pt.get("pressure").and_then(|v| v.as_u64()).unwrap_or(2048) as u16;
+                    let tilt_x = pt.get("tilt_x").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                    let tilt_y = pt.get("tilt_y").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                    let cum_time = pt.get("cum_time").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    points.push(Point {
+                        x,
+                        y,
+                        pressure,
+                        tilt_x,
+                        tilt_y,
+                        cum_time,
+                    });
+                }
+            }
+
+            // Native text box (pen_type 16): use .note's built-in text support
+            let is_text = item.get("is_text").and_then(|v| v.as_bool()).unwrap_or(false);
+            if is_text {
+                let text_content = item.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let text_style = item.get("text_style").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let bounding_rect = item.get("bounding_rect").and_then(|v| v.as_array()).map(|a| {
+                    [
+                        a.get(0).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                        a.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                        a.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                        a.get(3).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                    ]
+                });
+                let point_list = if let Some(ref br) = bounding_rect {
+                    vec![[br[1], br[0]], [br[3], br[2]]] // [left,top], [right,bottom]
+                } else { vec![] };
+                let stub = Stroke { uuid: uuid.clone(), points: Vec::new() };
+                let meta = ShapeMeta {
+                    pen_type: 16, // Text box
+                    thickness: 0.0,
+                    color_rgba,
+                    point_list,
+                    bounding_rect,
+                    text: Some(text_content),
+                    text_style,
+                    page_id: Some(page_id.clone()),
+                    created_ts: now + i as u64,
+                    zorder: now + i as u64,
+                    ..Default::default()
+                };
+                self.shape_meta.insert(uuid.clone(), meta.clone());
+                new_shapes_for_page.push((stub, meta));
+            } else if is_fill {
+                // Fill shape: use point_list for geometric rendering (pen_type 17 = polygon)
+                let point_list: Vec<[f32; 2]> = points.iter().map(|p| [p.x, p.y]).collect();
+                let stub = Stroke { uuid: uuid.clone(), points: Vec::new() };
+                let meta = ShapeMeta {
+                    pen_type,
+                    thickness,
+                    color_rgba,
+                    fill_color,
+                    point_list,
+                    page_id: Some(page_id.clone()),
+                    created_ts: now + i as u64,
+                    zorder: now + i as u64,
+                    ..Default::default()
+                };
+                self.shape_meta.insert(uuid.clone(), meta.clone());
+                // No stroke data — geometric shapes use point_list only
+                new_shapes_for_page.push((stub, meta));
+            } else {
+                // Stroke shape: add to notes for binary point data
+                let stroke = Stroke { uuid: uuid.clone(), points };
+                let meta = ShapeMeta {
+                    pen_type,
+                    thickness,
+                    color_rgba,
+                    page_id: Some(page_id.clone()),
+                    created_ts: now + i as u64,
+                    zorder: now + i as u64,
+                    ..Default::default()
+                };
+                self.shape_meta.insert(uuid.clone(), meta.clone());
+                self.notes[page_idx].strokes.push(stroke.clone());
+                self.deb_notes[page_idx].strokes.push(stroke.clone());
+                new_shapes_for_page.push((stroke, meta));
+            }
+        }
+
+        self.new_shapes
+            .entry(page_id)
+            .or_insert_with(Vec::new)
+            .extend(new_shapes_for_page);
+        Ok(())
+    }
 
     pub fn debloat_note(&mut self, idx: usize, threshold: f32, press_eq: f32, tilt_eq: f32) {
         if idx >= self.notes.len() { return; }
@@ -969,6 +1273,15 @@ impl AppEngine {
 
         for stroke in &stroke_data.strokes {
             if stroke.points.len() < 3 { new_strokes.push(stroke.clone()); continue; }
+
+            // Scanline fills (pen_type=37): skip decimation. Points are left/right edge
+            // pairs at ~1 row/px — already minimal, and the rectangle renderer can't
+            // simplify edges without visible stepping, as a trapezoid renderer would allow.
+            if self.shape_meta.get(&stroke.uuid).map_or(false, |m| m.pen_type == 37) {
+                new_strokes.push(stroke.clone());
+                continue;
+            }
+
             let u_tx = unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_x as f32).collect::<Vec<_>>());
             let u_ty = unwrap_8bit(&stroke.points.iter().map(|p| p.tilt_y as f32).collect::<Vec<_>>());
             let math_pts: Vec<[f32; 5]> = stroke.points.iter().enumerate().map(|(i, p)| { [p.x, p.y, p.pressure as f32 * p_scale, u_tx[i] * t_scale, u_ty[i] * t_scale] }).collect();
@@ -1033,9 +1346,9 @@ impl AppEngine {
         let mut render_list: Vec<(u64, RenderItem)> = Vec::new();
 
         let strokes: Vec<&Stroke> = if use_deb {
-            self.deb_notes.iter().filter(|n| n.path.contains(&page_id)).flat_map(|n| &n.strokes).collect()
+            self.deb_notes.iter().filter(|n| note_page_id(&n.path) == Some(&page_id)).flat_map(|n| &n.strokes).collect()
         } else {
-            self.notes.iter().filter(|n| n.path.contains(&page_id)).flat_map(|n| &n.strokes).collect()
+            self.notes.iter().filter(|n| note_page_id(&n.path) == Some(&page_id)).flat_map(|n| &n.strokes).collect()
         };
 
         let mut stroke_uuids = std::collections::HashSet::new();
@@ -1055,7 +1368,29 @@ impl AppEngine {
             .map(|(k, _)| k.clone()).collect();
         for k in shape_keys { let ts = self.shape_meta[&k].created_ts; render_list.push((ts, RenderItem::Shape(k))); }
 
-        render_list.sort_by_key(|(ts, _)| *ts);
+        // Sort
+        // - If layers exist: sort by layer position (layerList order), then createdAt
+        // - No layers: sort by createdAt
+        if let Some(layer_order) = self.page_layers.get(&page_id) {
+            let layer_pos: HashMap<u64, usize> = layer_order.iter().enumerate().map(|(i, lid)| (*lid, i)).collect();
+            let fallback = layer_order.len();
+            let shape_meta = &self.shape_meta;
+            render_list.sort_by(|(ts_a, item_a), (ts_b, item_b)| {
+                let zorder_a = match item_a {
+                    RenderItem::Stroke(s) => shape_meta.get(&s.uuid).map_or(0, |m| m.zorder),
+                    RenderItem::Shape(uuid) => shape_meta.get(uuid).map_or(0, |m| m.zorder),
+                };
+                let zorder_b = match item_b {
+                    RenderItem::Stroke(s) => shape_meta.get(&s.uuid).map_or(0, |m| m.zorder),
+                    RenderItem::Shape(uuid) => shape_meta.get(uuid).map_or(0, |m| m.zorder),
+                };
+                let lpos_a = layer_pos.get(&zorder_a).copied().unwrap_or(fallback);
+                let lpos_b = layer_pos.get(&zorder_b).copied().unwrap_or(fallback);
+                lpos_a.cmp(&lpos_b).then(ts_a.cmp(ts_b))
+            });
+        } else {
+            render_list.sort_by_key(|(ts, _)| *ts);
+        }
 
         for (_, item) in &render_list {
             match item {
@@ -1115,13 +1450,36 @@ impl AppEngine {
         }
     }
 
+    pub fn render_template_only(&mut self, canvas: &HtmlCanvasElement, page_idx: usize) {
+        let ctx = canvas.get_context("2d").unwrap().unwrap().dyn_into::<CanvasRenderingContext2d>().unwrap();
+        ctx.clear_rect(0.0, 0.0, self.canvas_w as f64, self.canvas_h as f64);
+        ctx.set_fill_style_str("#ffffff");
+        ctx.fill_rect(0.0, 0.0, self.canvas_w as f64, self.canvas_h as f64);
+
+        if page_idx >= self.pages.len() { return; }
+        let page_id = self.pages[page_idx].clone();
+
+        // Draw page background image if available
+        if let Some(bg_img) = self.bg_images.get(&page_id) {
+            let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(
+                bg_img, 0.0, 0.0, self.canvas_w as f64, self.canvas_h as f64
+            );
+        }
+
+        // Draw template (ruled lines, grids, etc.)
+        let tmpl_key = format!("tmpl_{}", page_id);
+        if let Some(tmpl_img) = self.bg_images.get(&tmpl_key) {
+            Self::render_template(&ctx, tmpl_img, self.canvas_w as f64, self.canvas_h as f64);
+        }
+    }
+
     pub fn export_stroke_data(&self, page_idx: usize) -> String {
         if page_idx >= self.pages.len() {
             return r#"{"canvas_w":0,"canvas_h":0,"strokes":[]}"#.to_string();
         }
         let page_id = &self.pages[page_idx];
         let mut strokes: Vec<&Stroke> = self.notes.iter()
-            .filter(|n| n.path.contains(page_id))
+            .filter(|n| note_page_id(&n.path) == Some(page_id.as_str()))
             .flat_map(|n| &n.strokes)
             .collect();
         // Sort by created_ts to match render_page z-order
@@ -1153,9 +1511,10 @@ impl AppEngine {
                 pts_json.push(format!("[{},{},{},{},{}]",
                     x, y, p.pressure, tilt_x_unwrapped[i], p.tilt_y));
             }
+            let mat_json = format!("[{},{},{},{},{},{}]", mat[0], mat[1], mat[2], mat[3], mat[4], mat[5]);
             out_strokes.push(format!(
-                r#"{{"pen_type":{},"thickness":{},"color":[{},{},{}],"alpha":{},"points":[{}]}}"#,
-                meta.pen_type, meta.thickness, r, g, b, a,
+                r#"{{"pen_type":{},"thickness":{},"color":[{},{},{}],"alpha":{},"matrix":{},"points":[{}]}}"#,
+                meta.pen_type, meta.thickness, r, g, b, a, mat_json,
                 pts_json.join(",")
             ));
         }
@@ -1536,8 +1895,18 @@ impl AppEngine {
                 } else { None }
             });
 
+        // Skip features with no stroke configured and no fill (empty strokeAttr = hidden edge)
+        let stroke_attr_obj = feature.get("properties").and_then(|p| p.get("strokeAttr"));
+        let has_stroke = stroke_attr_obj.map_or(false, |sa| {
+            sa.as_object().map_or(false, |obj| !obj.is_empty())
+        });
+        let has_fill = fill_color.is_some();
+        if !has_stroke && !has_fill {
+            return;
+        }
+
         // Check for per-feature stroke overrides (in properties.strokeAttr)
-        if let Some(stroke_attr) = feature.get("properties").and_then(|p| p.get("strokeAttr")) {
+        if let Some(stroke_attr) = stroke_attr_obj {
             if let Some(w) = stroke_attr.get("width").and_then(|v| v.as_f64()) {
                 // strokeAttr lineWidth is also in local coords; scale by matrix
                 let sx = ((matrix[0] as f64).powi(2) + (matrix[3] as f64).powi(2)).sqrt();
@@ -1586,30 +1955,59 @@ impl AppEngine {
                 if sub_type == "WaveLine" {
                     let p0 = parse_coord(&pts[0]).unwrap_or([0.0; 2]);
                     let p1 = parse_coord(&pts[pts.len()-1]).unwrap_or([0.0; 2]);
-                    let (x0, y0) = transform_point(&p0, matrix);
-                    let (x1, y1) = transform_point(&p1, matrix);
                     // Read waveAttr from feature properties
-                    let mut wavy_len = 24.0_f64;
-                    let mut wavy_peak = 6.0_f64;
+                    let mut wavy_len_base = 24.0_f64;
+                    let mut wavy_peak_base = 12.0_f64;
                     if let Some(wa) = feature.get("properties").and_then(|p| p.get("waveAttr"))
                         .or_else(|| feature.get("waveAttr"))
                         .or_else(|| geometry.get("waveAttr")) {
-                        if let Some(wl) = wa.get("wavyLength").and_then(|v| v.as_f64()) { wavy_len = wl; }
-                        if let Some(wp) = wa.get("wavyPeak").and_then(|v| v.as_f64()) { wavy_peak = wp; }
+                        if let Some(wl) = wa.get("wavyLength").and_then(|v| v.as_f64()) { wavy_len_base = wl; }
+                        if let Some(wp) = wa.get("wavyPeak").and_then(|v| v.as_f64()) { wavy_peak_base = wp; }
                     }
-                    let dx = x1 - x0; let dy = y1 - y0;
-                    let len = (dx*dx + dy*dy).sqrt();
-                    if len < 0.1 { if has_dash { ctx.set_line_dash(&js_sys::Array::new()).ok(); } return; }
-                    let waves = (len / wavy_len).max(1.0);
-                    let steps = (waves * 12.0) as usize;
+                    // Get local stroke width from per-feature strokeAttr or meta
+                    let local_sw = feature.get("properties")
+                        .and_then(|p| p.get("strokeAttr"))
+                        .and_then(|sa| sa.get("width"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(thickness / {
+                            let sx = ((matrix[0] as f64).powi(2) + (matrix[3] as f64).powi(2)).sqrt();
+                            let sy = ((matrix[1] as f64).powi(2) + (matrix[4] as f64).powi(2)).sqrt();
+                            ((sx + sy) / 2.0).max(1.0)
+                        });
+                    // Effective wavelength/peak include stroke width (matching device renderer)
+                    let wave_len = wavy_len_base + local_sw * 2.0;
+                    let wave_peak = wavy_peak_base + local_sw / 2.0;
+
+                    // Compute in local coords, then transform each point
+                    let ldx = (p1[0] - p0[0]) as f64;
+                    let ldy = (p1[1] - p0[1]) as f64;
+                    let dist = (ldx*ldx + ldy*ldy).sqrt();
+                    if dist < 0.1 { if has_dash { ctx.set_line_dash(&js_sys::Array::new()).ok(); } return; }
+                    let num_waves = dist / wave_len;
+                    let cos_a = ldx / dist;
+                    let sin_a = ldy / dist;
+                    // Rotate local point (px, py) to line direction + translate to p0
+                    let rot = |px: f64, py: f64| -> [f64; 2] {
+                        [p0[0] as f64 + px * cos_a - py * sin_a,
+                         p0[1] as f64 + px * sin_a + py * cos_a]
+                    };
+                    let (tx0, ty0) = transform_point(&p0, matrix);
                     ctx.begin_path();
-                    for i in 0..=steps {
-                        let t = i as f64 / steps as f64;
-                        let wave_y = wavy_peak * (t * waves * 2.0 * std::f64::consts::PI).sin();
-                        let nx = -dy / len; let ny = dx / len;
-                        let px = x0 + dx * t + nx * wave_y;
-                        let py = y0 + dy * t + ny * wave_y;
-                        if i == 0 { ctx.move_to(px, py); } else { ctx.line_to(px, py); }
+                    ctx.move_to(tx0, ty0);
+                    let mut ox = 0.0_f64;
+                    let n = num_waves as usize;
+                    for _i in 0..n {
+                        let cp = rot(ox + wave_len / 4.0, wave_peak);
+                        let mp = rot(ox + wave_len / 2.0, 0.0);
+                        let (c1x, c1y) = transform_point(&cp, matrix);
+                        let (m1x, m1y) = transform_point(&mp, matrix);
+                        ctx.quadratic_curve_to(c1x, c1y, m1x, m1y);
+                        let cp2 = rot(ox + wave_len * 3.0 / 4.0, -wave_peak);
+                        let mp2 = rot(ox + wave_len, 0.0);
+                        let (c2x, c2y) = transform_point(&cp2, matrix);
+                        let (m2x, m2y) = transform_point(&mp2, matrix);
+                        ctx.quadratic_curve_to(c2x, c2y, m2x, m2y);
+                        ox += wave_len;
                     }
                     ctx.stroke();
                 } else {
@@ -1671,30 +2069,46 @@ impl AppEngine {
             },
             "Polygon" => {
                 // Boox Polygon coords are edge pairs: [[startPt, endPt], [startPt, endPt], ...]
-                // Each element is a 2-point line segment. Extract first point of each edge
-                // to form the polygon vertex list, then draw as a single filled polygon.
+                // Draw both start and end of each edge, connecting consecutive edges
+                // when the previous end matches the current start (matching device renderer).
                 let edges = match coords.and_then(|c| c.as_array()) {
                     Some(a) => a,
                     _ => { if has_dash { ctx.set_line_dash(&js_sys::Array::new()).ok(); } return; },
                 };
-                if edges.len() >= 2 {
+                if !edges.is_empty() {
+                    let parse_edge_pt = |pair: &[serde_json::Value], idx: usize| -> Option<[f64; 2]> {
+                        pair.get(idx).and_then(|v| v.as_array()).and_then(|a| {
+                            Some([a.get(0)?.as_f64()?, a.get(1)?.as_f64()?])
+                        })
+                    };
                     ctx.begin_path();
-                    let mut first = true;
+                    let mut prev_end: Option<[f64; 2]> = None;
+                    let mut first_start: Option<[f64; 2]> = None;
                     for edge in edges {
                         let pair = match edge.as_array() {
-                            Some(a) if !a.is_empty() => a,
+                            Some(a) if a.len() >= 2 => a,
                             _ => continue,
                         };
-                        // edge is [[x0,y0],[x1,y1]] — take first point as vertex
-                        let vertex = if let Some(start_pt) = pair[0].as_array() {
-                            [start_pt[0].as_f64().unwrap_or(0.0), start_pt[1].as_f64().unwrap_or(0.0)]
-                        } else {
-                            [pair[0].as_f64().unwrap_or(0.0), pair.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0)]
-                        };
-                        let (x, y) = transform_point(&vertex, matrix);
-                        if first { ctx.move_to(x, y); first = false; } else { ctx.line_to(x, y); }
+                        let start = match parse_edge_pt(pair, 0) { Some(p) => p, None => continue };
+                        let end = match parse_edge_pt(pair, 1) { Some(p) => p, None => continue };
+                        if first_start.is_none() { first_start = Some(start); }
+                        let (sx, sy) = transform_point(&start, matrix);
+                        let (ex, ey) = transform_point(&end, matrix);
+                        match prev_end {
+                            None => { ctx.move_to(sx, sy); ctx.line_to(ex, ey); },
+                            Some(pe) if (pe[0] - start[0]).abs() < 0.01 && (pe[1] - start[1]).abs() < 0.01 => {
+                                ctx.line_to(ex, ey);
+                            },
+                            _ => { ctx.move_to(sx, sy); ctx.line_to(ex, ey); },
+                        }
+                        prev_end = Some(end);
                     }
-                    ctx.close_path();
+                    // Close if last end matches first start
+                    if let (Some(pe), Some(fs)) = (prev_end, first_start) {
+                        if (pe[0] - fs[0]).abs() < 0.01 && (pe[1] - fs[1]).abs() < 0.01 {
+                            ctx.close_path();
+                        }
+                    }
                     if let Some(ref fc) = fill_color {
                         ctx.set_fill_style_str(fc);
                         ctx.fill();
@@ -1712,22 +2126,32 @@ impl AppEngine {
                         if pts.len() >= 2 {
                             let p0 = parse_coord(&pts[0]).unwrap_or([0.0; 2]);
                             let p1 = parse_coord(&pts[1]).unwrap_or([0.0; 2]);
-                            // Bounding box [min, max] → ellipse
-                            // Transform all 4 corners to handle non-uniform scaling
-                            let (x0, y0) = transform_point(&p0, matrix);
-                            let (x1, y1) = transform_point(&p1, matrix);
-                            let cx = (x0 + x1) / 2.0;
-                            let cy = (y0 + y1) / 2.0;
-                            let rx = ((x1 - x0) / 2.0).abs();
-                            let ry = ((y1 - y0) / 2.0).abs();
+                            // Compute center and radii in local (untransformed) space
+                            let cx = (p0[0] + p1[0]) / 2.0;
+                            let cy = (p0[1] + p1[1]) / 2.0;
+                            let rx = ((p1[0] - p0[0]) / 2.0).abs();
+                            let ry = ((p1[1] - p0[1]) / 2.0).abs();
                             if rx > 0.1 && ry > 0.1 {
+                                // Apply matrix for ellipse geometry, reset for uniform stroke
+                                // (strokeUniform pattern for correct rendering of rotated shapes)
+                                ctx.save();
+                                let m = matrix;
+                                let _ = ctx.set_transform(
+                                    m[0] as f64, m[3] as f64,
+                                    m[1] as f64, m[4] as f64,
+                                    m[2] as f64, m[5] as f64,
+                                );
                                 ctx.begin_path();
-                                let _ = ctx.ellipse(cx, cy, rx, ry, 0.0, 0.0, 2.0 * std::f64::consts::PI);
+                                let _ = ctx.ellipse(cx, cy, rx.max(0.1), ry.max(0.1), 0.0, 0.0, 2.0 * std::f64::consts::PI);
+                                // Reset to identity for strokeUniform
+                                let _ = ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+                                ctx.set_line_width(thickness);
                                 if let Some(ref fc) = fill_color {
                                     ctx.set_fill_style_str(fc);
                                     ctx.fill();
                                 }
                                 ctx.stroke();
+                                ctx.restore();
                             }
                         }
                     },
@@ -1746,34 +2170,27 @@ impl AppEngine {
                         }
                     },
                     "Arc" => {
-                        // Elliptical arc: [bboxMin, bboxMax, angleControl]
-                        // angle_ctrl[0] < 90 → front/visible half, >= 90 → back/hidden half
-                        // Arcs are always half-ellipses (full ellipses use Oval subType).
+                        // Elliptical arc: [bboxMin, bboxMax, [startDeg, sweepDeg]]
+                        // Sample the Boox parametric formula, transform for strokeUniform.
                         if pts.len() >= 3 {
-                            let bbox_min = parse_coord(&pts[0]).unwrap_or([0.0; 2]);
-                            let bbox_max = parse_coord(&pts[1]).unwrap_or([0.0; 2]);
-                            let angle_ctrl = parse_coord(&pts[2]).unwrap_or([0.0; 2]);
-
-                            let (x0, y0) = transform_point(&bbox_min, matrix);
-                            let (x1, y1) = transform_point(&bbox_max, matrix);
-                            let ecx = (x0 + x1) / 2.0;
-                            let ecy = (y0 + y1) / 2.0;
-                            let rx = ((x1 - x0) / 2.0).abs();
-                            let ry = ((y1 - y0) / 2.0).abs();
-
+                            let p0 = parse_coord(&pts[0]).unwrap_or([0.0; 2]);
+                            let p1 = parse_coord(&pts[1]).unwrap_or([0.0; 2]);
+                            let angles = parse_coord(&pts[2]).unwrap_or([0.0; 2]);
+                            let (start_deg, sweep_deg) = (angles[0], angles[1]);
+                            let cx = (p0[0] + p1[0]) / 2.0;
+                            let cy = (p0[1] + p1[1]) / 2.0;
+                            let rx = ((p1[0] - p0[0]) / 2.0).abs();
+                            let ry = ((p1[1] - p0[1]) / 2.0).abs();
                             if rx > 0.1 && ry > 0.1 {
-                                // angle_ctrl[0] < 90 = "front" arc → bottom half in canvas
-                                // y_flip inverts which canvas half to use
-                                let is_front = (angle_ctrl[0] as i32) < 90;
-                                let y_flip = matrix[4] < 0.0;
-                                let draw_lower = is_front ^ y_flip;
-                                let (start, end) = if draw_lower {
-                                    (0.0, std::f64::consts::PI)                     // bottom half
-                                } else {
-                                    (std::f64::consts::PI, 2.0 * std::f64::consts::PI) // top half
-                                };
+                                let steps = (sweep_deg.abs() as usize).max(2);
                                 ctx.begin_path();
-                                let _ = ctx.ellipse(ecx, ecy, rx, ry, 0.0, start, end);
+                                for i in 0..=steps {
+                                    let rad = (start_deg + sweep_deg * (i as f64 / steps as f64)).to_radians();
+                                    let lx = cx + rx * rad.cos();
+                                    let ly = cy + ry * rad.sin();
+                                    let (tx, ty) = transform_point(&[lx, ly], matrix);
+                                    if i == 0 { ctx.move_to(tx, ty); } else { ctx.line_to(tx, ty); }
+                                }
                                 if let Some(ref fc) = fill_color {
                                     ctx.set_fill_style_str(fc);
                                     ctx.fill();
@@ -1784,36 +2201,28 @@ impl AppEngine {
                     },
                     "Bracket" => {
                         // Curly brace {: 3 points [tip, end1, end2]
-                        // Cubic Bezier S-curves computed in LOCAL coords so the
-                        // bracket's aspect ratio keeps curves tight.
+                        // Each arm: tip → knee → end → bezier curl
                         if pts.len() >= 3 {
-                            let p0 = parse_coord(&pts[0]).unwrap_or([0.0; 2]); // tip
-                            let p1 = parse_coord(&pts[1]).unwrap_or([0.0; 2]); // end1
-                            let p2 = parse_coord(&pts[2]).unwrap_or([0.0; 2]); // end2
-                            // Control points in LOCAL space:
-                            // - vertical tangent at each end (same x)
-                            // - horizontal tangent at tip (same y)
-                            let fy = 0.6_f64; // y-fraction: how far P1 extends toward tip
-                            let fx = 0.4_f64; // x-fraction: how far P2 sits from tip
-                            // end1 → tip
-                            let c1 = [p1[0], p1[1] + (p0[1] - p1[1]) * fy];
-                            let c2 = [p0[0] + (p1[0] - p0[0]) * fx, p0[1]];
-                            // tip → end2
-                            let c3 = [p0[0] + (p2[0] - p0[0]) * fx, p0[1]];
-                            let c4 = [p2[0], p2[1] + (p0[1] - p2[1]) * fy];
-                            // Transform to page coords
-                            let (tipx, tipy) = transform_point(&p0, matrix);
-                            let (x1, y1) = transform_point(&p1, matrix);
-                            let (x2, y2) = transform_point(&p2, matrix);
-                            let (c1x, c1y) = transform_point(&c1, matrix);
-                            let (c2x, c2y) = transform_point(&c2, matrix);
-                            let (c3x, c3y) = transform_point(&c3, matrix);
-                            let (c4x, c4y) = transform_point(&c4, matrix);
-                            ctx.begin_path();
-                            ctx.move_to(x1, y1);
-                            ctx.bezier_curve_to(c1x, c1y, c2x, c2y, tipx, tipy);
-                            ctx.bezier_curve_to(c3x, c3y, c4x, c4y, x2, y2);
-                            ctx.stroke();
+                            let c = parse_coord(&pts[0]).unwrap_or([0.0; 2]);
+                            let arms = [
+                                (parse_coord(&pts[1]).unwrap_or([0.0; 2]), -1.0_f64),
+                                (parse_coord(&pts[2]).unwrap_or([0.0; 2]),  1.0_f64),
+                            ];
+                            let (ki, ne, qi) = (20.0_f64, 10.0_f64, 8.0_f64);
+                            let sign = if arms[0].0[0] >= c[0] { 1.0 } else { -1.0 };
+                            let (p0x, p0y) = transform_point(&c, matrix);
+                            for (end, yd) in &arms {
+                                let (k1x, k1y) = transform_point(&[end[0], c[1] + yd * ki], matrix);
+                                let (e1x, e1y) = transform_point(end.as_slice(), matrix);
+                                let (c1x, c1y) = transform_point(&[end[0], end[1] + yd * qi], matrix);
+                                let (c2x, c2y) = transform_point(&[end[0] + sign * ne, end[1] + yd * ne], matrix);
+                                ctx.begin_path();
+                                ctx.move_to(p0x, p0y);
+                                ctx.line_to(k1x, k1y);
+                                ctx.line_to(e1x, e1y);
+                                ctx.bezier_curve_to(e1x, e1y, c1x, c1y, c2x, c2y);
+                                ctx.stroke();
+                            }
                         }
                     },
                     _ => {
@@ -1908,6 +2317,12 @@ impl AppEngine {
             },
             60 | 61 => { // Calligraphy Brushes
                 let n = pts.len();
+                // Compute matrix rotation angle to convert page-space stroke direction
+                // back to local space (nib angles are in local/tablet space)
+                let mat_rotation = if let Some(m) = meta.matrix {
+                    (m[3]).atan2(m[0])
+                } else { 0.0 };
+
                 let mut smooth_nib = vec![0.0; n];
                 smooth_nib[0] = pts[0][3] * (2.0 * std::f32::consts::PI / 256.0);
                 for i in 1..n { smooth_nib[i] = smooth_nib[i-1] + 0.15 * (pts[i][3] * (2.0 * std::f32::consts::PI / 256.0) - smooth_nib[i-1]); }
@@ -1922,7 +2337,8 @@ impl AppEngine {
                 let min_frac = if meta.pen_type == 60 { 0.18 } else { 0.211 };
                 let mut raw_widths = vec![0.0; n];
                 for i in 0..n {
-                    let diff = if meta.pen_type == 60 { smooth_dir[i] - smooth_nib[i] } else { smooth_dir[i] - 0.782 };
+                    let local_dir = smooth_dir[i] - mat_rotation;
+                    let diff = if meta.pen_type == 60 { local_dir - smooth_nib[i] } else { local_dir - std::f32::consts::FRAC_PI_4 };
                     let chisel = if meta.pen_type == 60 { diff.cos().abs() } else { diff.sin().abs() };
                     let nib_w = if meta.pen_type == 60 { meta.thickness * 0.95 * (pts[i][2] / 4095.0).powf(0.5) } else { 0.85 * meta.thickness + 1.64 };
                     let mut w = nib_w * (min_frac + (1.0 - min_frac) * chisel);
@@ -1946,53 +2362,41 @@ impl AppEngine {
                 Self::fill_stroke_outline(&ctx, &pts, &half_w);
             },
             37 => { // Scanline Fill
-                // Points are pairs: [left_edge, right_edge] per scan row in local space.
-                // We compute strip quads from consecutive rows, then transform corners
-                // so rotated fills render correctly.
+                // Points are pairs: each (pts[2i], pts[2i+1]) defines opposite corners
+                // of a rectangle in local space.
+                // We transform all 4 corners through the matrix and draw as quads.
                 let raw: Vec<[f32; 2]> = stroke.points.iter().map(|p| [p.x, p.y]).collect();
                 let pairs = raw.len() / 2;
                 if pairs == 0 { ctx.restore(); return; }
 
                 let mat = meta.matrix.unwrap_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
-                let xf = |p: [f32; 2]| -> (f64, f64) {
-                    ((mat[0] as f64 * p[0] as f64 + mat[1] as f64 * p[1] as f64 + mat[2] as f64),
-                     (mat[3] as f64 * p[0] as f64 + mat[4] as f64 * p[1] as f64 + mat[5] as f64))
+                let xf = |x: f32, y: f32| -> (f64, f64) {
+                    ((mat[0] as f64 * x as f64 + mat[1] as f64 * y as f64 + mat[2] as f64),
+                     (mat[3] as f64 * x as f64 + mat[4] as f64 * y as f64 + mat[5] as f64))
                 };
 
-                ctx.begin_path();
+                let sw = meta.thickness as f64;
+                ctx.set_line_width(sw);
                 for i in 0..pairs {
-                    let l0 = [raw[i * 2][0] - 2.0, raw[i * 2][1]];
-                    let r0 = [raw[i * 2 + 1][0] + 2.0, raw[i * 2 + 1][1]];
-                    let y_top = l0[1].min(r0[1]);
-                    let y_bot = if i + 1 < pairs {
-                        let nl = raw[(i + 1) * 2];
-                        let nr = raw[(i + 1) * 2 + 1];
-                        let cand = nl[1].min(nr[1]);
-                        if cand > y_top + 0.01 { cand } else {
-                            // Search forward for next distinct row
-                            let mut found = y_top + 1.0;
-                            for j in i + 1..pairs {
-                                let c = raw[j * 2][1].min(raw[j * 2 + 1][1]);
-                                if c > y_top + 0.01 { found = c; break; }
-                            }
-                            found
-                        }
-                    } else { y_top + 1.0 };
-                    let y_bot = y_bot + 1.5; // overlap to prevent gaps after transform
+                    let x = raw[i * 2][0];
+                    let y = raw[i * 2][1];
+                    let w = raw[i * 2 + 1][0] - x;
+                    let h = raw[i * 2 + 1][1] - y;
 
-                    // Four corners of the strip in local space
-                    let tl = xf([l0[0], y_top]);
-                    let tr = xf([r0[0], y_top]);
-                    let br = xf([r0[0], y_bot]);
-                    let bl = xf([l0[0], y_bot]);
+                    let tl = xf(x, y);
+                    let tr = xf(x + w, y);
+                    let br = xf(x + w, y + h);
+                    let bl = xf(x, y + h);
 
+                    ctx.begin_path();
                     ctx.move_to(tl.0, tl.1);
                     ctx.line_to(tr.0, tr.1);
                     ctx.line_to(br.0, br.1);
                     ctx.line_to(bl.0, bl.1);
                     ctx.close_path();
+                    ctx.fill();
+                    if sw > 0.0 { ctx.stroke(); }
                 }
-                ctx.fill();
             },
             _ => { // Ballpoint / Highlight
                 ctx.begin_path(); ctx.set_line_width(meta.thickness as f64);
@@ -2013,13 +2417,14 @@ impl AppEngine {
             let mut arc = ZipArchive::new(Cursor::new(&self.zip_bytes)).map_err(|_| JsValue::from_str("ZIP err"))?;
             let r_map: HashMap<_, _> = self.deb_notes.iter().map(|nd| (nd.path.clone(), build_points(nd))).collect();
 
+            let mut appended_pages: HashSet<String> = HashSet::new();
+
             for i in 0..arc.len() {
                 let Ok(mut f) = arc.by_index(i) else { continue; }; let name = f.name().to_string();
                 if name.contains("/stash/") { continue; }
                 if wr.start_file(&name, opt).is_err() { continue; }
                 if let Some(d) = r_map.get(&name) { wr.write_all(d).unwrap(); }
-                else if !self.meta_overrides.is_empty() && name.ends_with(".zip") && name.contains("shape") {
-                    // Rewrite shape protobuf with pen_type/thickness overrides
+                else if (!self.meta_overrides.is_empty() || !self.new_shapes.is_empty()) && name.ends_with(".zip") && name.contains("shape") {
                     let mut z_data = Vec::new();
                     if f.read_to_end(&mut z_data).is_ok() {
                         if let Ok(mut inner_arc) = ZipArchive::new(Cursor::new(&z_data)) {
@@ -2032,7 +2437,47 @@ impl AppEngine {
                                     let _ = inner_wr.start_file(&inner_name, opt);
                                     let mut sh_data = Vec::new();
                                     if sf.read_to_end(&mut sh_data).is_ok() {
-                                        let patched = patch_shape_protobuf(&sh_data, &self.meta_overrides);
+                                        let mut patched = if !self.meta_overrides.is_empty() {
+                                            patch_shape_protobuf(&sh_data, &self.meta_overrides)
+                                        } else {
+                                            sh_data.clone()
+                                        };
+
+                                        // Append new SVG-imported shapes to the protobuf
+                                        let page_id_from_path = {
+                                            let parts: Vec<&str> = name.split('/').collect();
+                                            parts.iter().position(|&x| x == "shape")
+                                                .and_then(|idx| parts.get(idx + 1))
+                                                .map(|s| s.split('#').next().unwrap_or(s))
+                                        };
+
+                                        if let Some(pid) = page_id_from_path {
+                                            if !appended_pages.contains(pid) {
+                                                if let Some(new_shapes_for_page) = self.new_shapes.get(pid) {
+                                                    let parts: Vec<&str> = inner_name.split('#').collect();
+                                                    let shape_doc_uuid = parts.get(1).copied().unwrap_or("");
+
+                                                    let points_doc_uuid = self.deb_notes.iter()
+                                                        .find(|n| note_page_id(&n.path) == Some(pid))
+                                                        .and_then(|n| {
+                                                            let p: Vec<&str> = n.path.split('/').collect();
+                                                            p.iter().position(|&x| x == "point")
+                                                                .and_then(|pos| p.get(pos + 2))
+                                                                .and_then(|raw| {
+                                                                    let mut s = raw.split('#');
+                                                                    s.next();
+                                                                    s.next()
+                                                                })
+                                                        })
+                                                        .unwrap_or("");
+
+                                                    let appended = build_shape_protobuf(new_shapes_for_page, points_doc_uuid, shape_doc_uuid);
+                                                    patched.extend(appended);
+                                                    appended_pages.insert(pid.to_string());
+                                                }
+                                            }
+                                        }
+
                                         inner_wr.write_all(&patched).unwrap();
                                     }
                                 }

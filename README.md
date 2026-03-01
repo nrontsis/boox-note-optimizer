@@ -1,10 +1,19 @@
-# Boox Onyx `.note` file optimizer — debloats and previews .note files
+# Boox Note Optimizer
 
 ✨ **[Try the Web App Live Here!](https://nrontsis.github.io/boox-note-optimizer)** ✨
 
-This web app is a PWA with offline support. A service worker (`web/sw.js`) caches the app shell (HTML, JS, WASM, icons) on install using a cache-first strategy for local assets and network-first for CDN resources. The `demo.note` file is excluded from caching due to its size. 
-> [!IMPORTANT]
-> Bump the `CACHE_NAME` version in `sw.js` when deploying changes to force clients to re-fetch.
+An open-source toolkit for working with Boox `.note` files outside the Boox app. Preview, export, optimize, and convert your handwritten notes — all in the browser, fully private.
+
+### Features
+
+- **Optimize `.note` files** — shrink 5–10x with zero visual quality loss
+- **Import SVGs** — convert SVG drawings into `.note` format for your Boox device
+- **Preview & compare** — side-by-side visual comparison of original vs optimized
+- **Export** — download optimized `.note`, or export as PDF or SVG
+- **E-ink color preview** — simulate how colors look on a Kaleido 3 display
+- **Edit online** — open your drawing in an SVG editor, modify it, and re-import
+- **Fully private** — everything runs in your browser, no data uploaded
+- **Works offline** — installable as a PWA
 
 ### Android APK
 
@@ -12,7 +21,7 @@ A pre-built APK is available in [GitHub Releases](https://github.com/nrontsis/bo
 
 - **Open in Notes**: After optimization, tap "Open" to launch the result directly in the Boox Notes app
 - **Receive shared files**: Share a `.note` file from the Notes app to Note Optimizer
-- **Offline**: Works offline after first load (the web app is cached by the service worker)
+- **Offline**: Works offline after first load
 
 Exported files are saved to `Downloads/Note Optimizer/` and automatically cleaned up on each export.
 
@@ -23,7 +32,17 @@ cd android
 ./build.sh              # generates keystore on first run, outputs NoteOptimizer.apk
 ```
 
-## Overview of the document
+### Development
+
+```bash
+wasm-pack build --target web --out-dir web/pkg
+uv run python -m http.server 8080 --directory web
+```
+
+> [!IMPORTANT]
+> Bump the `CACHE_NAME` version in `web/sw.js` when deploying changes to force clients to re-fetch.
+
+## `.note` File Format Documentation
 
 A `.note` file is a ZIP archive produced by Boox/Onyx e-ink tablets. It stores handwritten strokes as sequences of pressure/tilt-sensitive points, plus per-stroke metadata (pen type, color, thickness, transform) in protobuf. The rendering model is pen-type-dependent: some pens produce constant-width line segments, others produce pressure-modulated variable-width strokes, filled polygons, raster textures, or scanline fills.
 
@@ -127,8 +146,9 @@ Each point is 16 bytes, big-endian (`>ffBBHI` in [struct](https://docs.python.or
 | 3     | 0    | varint  | Modified timestamp | Epoch ms |
 | 4     | 0    | varint  | Color              | ARGB u32 (see below) |
 | 5     | 5    | float32 | Thickness          | Line width |
+| 6     | 0    | varint  | Layer ID           | Z-order layer assignment. References a layer in the page's `layerList` (see **Stroke Z-Ordering**). |
 | 7     | 2    | string  | Bounding box JSON  | `{"bottom","empty","left","right","stability","top"}` |
-| 8     | 2    | string  | Transform matrix JSON | `{"values":[a,b,tx,c,d,ty,0,0,1]}` — 3×3 row-major affine. Applied to strokes that were moved/scaled on-device. |
+| 8     | 2    | string  | Transform matrix JSON | 3×3 row-major affine: `{"values":[a,b,tx,c,d,ty,0,0,1]}` or direct `[a,b,tx,c,d,ty,0,0,1]`. Applied to strokes that were moved/scaled on-device. |
 | 11    | 2    | string  | Pen config JSON    | See below |
 | 12    | 0    | varint  | Pen type           | Brush tool identifier (see Pen Types) |
 | 16    | 2    | string  | pointsDocUUID      | Same as `#points` header/path |
@@ -177,7 +197,7 @@ The note metadata protobuf (field tags from reverse engineering):
 | 9     | float   | Pen width              | |
 | 10    | float   | Scale factor           | |
 | 11    | string  | Pen settings JSON      | Detailed pen config with quick pen list |
-| 12    | string  | Canvas state JSON      | Page dimensions, zoom info, layer list per page |
+| 12    | string  | Canvas state JSON      | Contains `pageInfoMap` with per-page `layerList` (see **Stroke Z-Ordering**), plus page dimensions and zoom info |
 | 13    | string  | Background config JSON | Page background settings |
 | 14    | string  | Device info JSON       | Device name and screen dimensions |
 | 15    | uint32  | Fill color             | |
@@ -254,7 +274,7 @@ Field 12 in the shape protobuf identifies the brush tool. Observed values and th
 
 Each stroke is rendered by:
 1. **Looking up metadata** — the shape protobuf provides pen_type, thickness, color (ARGB), and an optional affine transform matrix
-2. **Applying the transform** — if the stroke was moved/scaled on-device, the 3×3 affine matrix (`{"values":[a,b,tx,c,d,ty,0,0,1]}`) is applied to each point: `x' = a*x + b*y + tx`, `y' = c*x + d*y + ty`
+2. **Applying the transform** — if the stroke was moved/scaled on-device, the 3×3 affine matrix (`{"values":[a,b,tx,c,d,ty,0,0,1]}` or direct `[a,b,tx,c,d,ty,0,0,1]`) is applied to each point: `x' = a*x + b*y + tx`, `y' = c*x + d*y + ty`
 3. **Unwrapping tilt** — 8-bit tilt values that wrap at 256 are unwrapped with modular arithmetic to produce continuous angles
 4. **Computing width** — per-point width is computed from pressure and pen-type-specific formulas (see Width Formulas below)
 5. **Drawing** — the pen type determines the drawing primitive (line segments, filled polygon, raster texture, or scanline rectangles)
@@ -391,9 +411,24 @@ The page size is **1860 x 2480 points** (approximately 25.83 x 34.44 inches at 7
 
 ### Stroke Z-Ordering
 
-Strokes are rendered bottom-to-top sorted by creation timestamp (shape protobuf field 2). Within a page, the `#points` index order may differ from creation order; the shape metadata's timestamp is the authoritative sort key. Later strokes render on top of earlier ones.
+Each stroke has a **layer ID** (shape protobuf field 6) that assigns it to a layer. The page's layer order is defined in the note metadata (field 12) `pageInfoMap` JSON:
 
-Fill strokes (pen_type 37) are rendered in timestamp order like all other strokes.
+```json
+{
+  "pageInfoMap": {
+    "<pageUUID>": {
+      "layerList": [
+        {"id": 1234567890, "lock": false, "show": true},
+        {"id": 9876543210, "lock": false, "show": true}
+      ]
+    }
+  }
+}
+```
+
+**Rendering order:** When layers exist, strokes are sorted by layer position (order in `layerList`) first, then by creation timestamp (field 2) within each layer. When no layer information is available, strokes fall back to creation-timestamp-only ordering. Within a page, the `#points` index order may differ from creation order; the shape metadata is authoritative.
+
+Fill strokes (pen_type 37) are rendered in the same layer+timestamp order as all other strokes.
 
 ### Stash (Undo History)
 

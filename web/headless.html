@@ -35,6 +35,20 @@ window.renderAllPages = async (b64) => {
     app.free();
     return urls;
 };
+window.renderTemplateOnly = async (b64, pageIdx) => {
+    const binary = atob(b64);
+    const u8 = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) u8[i] = binary.charCodeAt(i);
+    const app = new AppEngine(u8);
+    try { await app.load_images(); } catch(e) { console.warn('load_images:', e); }
+    const c = document.getElementById('c');
+    c.width = app.get_canvas_width() || 1860;
+    c.height = app.get_canvas_height() || 2480;
+    app.render_template_only(c, pageIdx || 0);
+    const url = c.toDataURL('image/png');
+    app.free();
+    return url;
+};
 window.renderDebloated = async (b64, pageIdx, threshold, pressEq, tiltEq) => {
     const binary = atob(b64);
     const u8 = new Uint8Array(binary.length);
@@ -77,6 +91,15 @@ window.getStrokeData = (b64, pageIdx) => {
     const json = app.export_stroke_data(pageIdx || 0);
     app.free();
     return json;
+};
+window.getPageCount = (b64) => {
+    const binary = atob(b64);
+    const u8 = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) u8[i] = binary.charCodeAt(i);
+    const app = new AppEngine(u8);
+    const n = app.get_page_count();
+    app.free();
+    return n;
 };
 window.ready = true;
 </script></body></html>
