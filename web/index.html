@@ -465,7 +465,7 @@
     </div>
     
     <script type="module">
-        import init, { AppEngine } from './pkg/boox_optimizer.js';
+        import init, { AppEngine, sample_svg_path } from './pkg/boox_optimizer.js';
         // Use of these secrets is restricted at Google Cloud so that they can be safely be visible here.
         const GOOGLE_CLIENT_ID = '189410272086-fcshg7ebslcfh6o7qof8i34eqia6bdmm.apps.googleusercontent.com';
         const GOOGLE_API_KEY = 'AIzaSyD9Gyrlihf8Xim_rHcLixLKSiVBCfYUqPA';
@@ -1360,22 +1360,16 @@
                 if (!hasStroke && !hasFill) return;
 
                 if (tag === 'path') {
-                    // Path: sample points along the path
-                    // TODO: optimize speed up with multithreading/rust or adaptive sampling (hopefully avoided)
-                    // to speed up complex SVGs 
-                    const len = el.getTotalLength();
-                    if (len === 0) return;
+                    // Path: sample via WASM (avoids slow getPointAtLength DOM calls)
+                    const d = el.getAttribute('d');
+                    if (!d) return;
+                    const ctmArr = ctm ? new Float64Array([ctm.a, ctm.b, ctm.c, ctm.d, ctm.e, ctm.f])
+                                       : new Float64Array([1,0,0,1,0,0]);
+                    const coords = sample_svg_path(d, ctmArr, scaleX, scaleY, offsetX, offsetY, 0.5);
                     const pts = [];
-                    const step = 0.5;
-                    for (let i = 0; i <= len; i += step) {
-                        const p = el.getPointAtLength(i);
-                        let x = p.x, y = p.y;
-                        if (ctm) {
-                            x = p.x * ctm.a + p.y * ctm.c + ctm.e;
-                            y = p.x * ctm.b + p.y * ctm.d + ctm.f;
-                        }
-                        pts.push({ x: x*scaleX + offsetX, y: y*scaleY + offsetY,
-                            pressure: 2048, tilt_x: 0, tilt_y: 0, cum_time: i * 5 });
+                    for (let i = 0; i < coords.length; i += 2) {
+                        pts.push({ x: coords[i], y: coords[i+1],
+                            pressure: 2048, tilt_x: 0, tilt_y: 0, cum_time: i * 2.5 });
                     }
                     if (hasFill) {
                         const fillColor = parseColor(effectiveFill);

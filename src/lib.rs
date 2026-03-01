@@ -1428,6 +1428,298 @@ pub fn cost(p: &[f32; 5], c: &[f32; 5], n: &[f32; 5]) -> f32 {
     s_dev.max(a_dev)
 }
 
+// ── SVG path sampling (replaces JS getPointAtLength loop) ──────────────
+
+fn cubic_at(t: f64, p0: f64, p1: f64, p2: f64, p3: f64) -> f64 {
+    let u = 1.0 - t;
+    u * u * u * p0 + 3.0 * u * u * t * p1 + 3.0 * u * t * t * p2 + t * t * t * p3
+}
+
+fn seg_len(x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
+    ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt()
+}
+
+fn cubic_arc_len(x0: f64, y0: f64, x1: f64, y1: f64, x2: f64, y2: f64, x3: f64, y3: f64, n: usize) -> f64 {
+    let mut len = 0.0;
+    let (mut px, mut py) = (x0, y0);
+    for i in 1..=n {
+        let t = i as f64 / n as f64;
+        let x = cubic_at(t, x0, x1, x2, x3);
+        let y = cubic_at(t, y0, y1, y2, y3);
+        len += seg_len(px, py, x, y);
+        px = x;
+        py = y;
+    }
+    len
+}
+
+fn sample_cubic(
+    out: &mut Vec<f64>, x0: f64, y0: f64, x1: f64, y1: f64,
+    x2: f64, y2: f64, x3: f64, y3: f64, step: f64,
+    ctm: &[f64; 6], sx: f64, sy: f64, ox: f64, oy: f64,
+) {
+    let arc = cubic_arc_len(x0, y0, x1, y1, x2, y2, x3, y3, 32);
+    if arc < 0.001 { return; }
+    let n = (arc / step).ceil().max(1.0) as usize;
+    for i in 1..=n {
+        let t = i as f64 / n as f64;
+        let x = cubic_at(t, x0, x1, x2, x3);
+        let y = cubic_at(t, y0, y1, y2, y3);
+        let tx = x * ctm[0] + y * ctm[2] + ctm[4];
+        let ty = x * ctm[1] + y * ctm[3] + ctm[5];
+        out.push(tx * sx + ox);
+        out.push(ty * sy + oy);
+    }
+}
+
+fn sample_line(
+    out: &mut Vec<f64>, x0: f64, y0: f64, x1: f64, y1: f64, step: f64,
+    ctm: &[f64; 6], sx: f64, sy: f64, ox: f64, oy: f64,
+) {
+    let d = seg_len(x0, y0, x1, y1);
+    if d < 0.001 { return; }
+    let n = (d / step).ceil().max(1.0) as usize;
+    for i in 1..=n {
+        let t = i as f64 / n as f64;
+        let x = x0 + t * (x1 - x0);
+        let y = y0 + t * (y1 - y0);
+        let tx = x * ctm[0] + y * ctm[2] + ctm[4];
+        let ty = x * ctm[1] + y * ctm[3] + ctm[5];
+        out.push(tx * sx + ox);
+        out.push(ty * sy + oy);
+    }
+}
+
+/// Convert SVG arc to cubic beziers (standard W3C algorithm).
+/// Returns Vec of (x1,y1, x2,y2, x,y) control point tuples.
+fn arc_to_cubics(
+    x0: f64, y0: f64, mut rx: f64, mut ry: f64,
+    x_rot_deg: f64, large_arc: bool, sweep: bool, x1: f64, y1: f64,
+) -> Vec<[f64; 6]> {
+    if (x0 - x1).abs() < 1e-10 && (y0 - y1).abs() < 1e-10 { return vec![]; }
+    if rx.abs() < 1e-10 || ry.abs() < 1e-10 {
+        return vec![[x0, y0, x1, y1, x1, y1]]; // degenerate → line
+    }
+    rx = rx.abs();
+    ry = ry.abs();
+    let phi = x_rot_deg.to_radians();
+    let (sin_phi, cos_phi) = phi.sin_cos();
+
+    // Step 1: compute (x1', y1')
+    let dx2 = (x0 - x1) / 2.0;
+    let dy2 = (y0 - y1) / 2.0;
+    let x1p = cos_phi * dx2 + sin_phi * dy2;
+    let y1p = -sin_phi * dx2 + cos_phi * dy2;
+
+    // Step 2: compute (cx', cy')
+    let x1p2 = x1p * x1p;
+    let y1p2 = y1p * y1p;
+    let mut rx2 = rx * rx;
+    let mut ry2 = ry * ry;
+    // Ensure radii are large enough
+    let lam = x1p2 / rx2 + y1p2 / ry2;
+    if lam > 1.0 {
+        let s = lam.sqrt();
+        rx *= s; ry *= s;
+        rx2 = rx * rx; ry2 = ry * ry;
+    }
+    let num = (rx2 * ry2 - rx2 * y1p2 - ry2 * x1p2).max(0.0);
+    let den = rx2 * y1p2 + ry2 * x1p2;
+    let mut sq = if den > 0.0 { (num / den).sqrt() } else { 0.0 };
+    if large_arc == sweep { sq = -sq; }
+    let cxp = sq * rx * y1p / ry;
+    let cyp = -sq * ry * x1p / rx;
+
+    // Step 3: compute (cx, cy)
+    let cx = cos_phi * cxp - sin_phi * cyp + (x0 + x1) / 2.0;
+    let cy = sin_phi * cxp + cos_phi * cyp + (y0 + y1) / 2.0;
+
+    // Step 4: compute theta1 and dtheta
+    let vx = (x1p - cxp) / rx;
+    let vy = (y1p - cyp) / ry;
+    let nx = (-x1p - cxp) / rx;
+    let ny = (-y1p - cyp) / ry;
+
+    fn angle(ux: f64, uy: f64, vx: f64, vy: f64) -> f64 {
+        let dot = ux * vx + uy * vy;
+        let len = (ux * ux + uy * uy).sqrt() * (vx * vx + vy * vy).sqrt();
+        let mut a = if len > 0.0 { (dot / len).clamp(-1.0, 1.0).acos() } else { 0.0 };
+        if ux * vy - uy * vx < 0.0 { a = -a; }
+        a
+    }
+    let theta1 = angle(1.0, 0.0, vx, vy);
+    let mut dtheta = angle(vx, vy, nx, ny);
+    if !sweep && dtheta > 0.0 { dtheta -= std::f64::consts::TAU; }
+    if sweep && dtheta < 0.0 { dtheta += std::f64::consts::TAU; }
+
+    // Split into segments of at most π/2
+    let segs = (dtheta.abs() / (std::f64::consts::FRAC_PI_2 + 0.001)).ceil().max(1.0) as usize;
+    let d_per = dtheta / segs as f64;
+    let alpha = (4.0 / 3.0) * (d_per / 4.0).tan();
+
+    let mut result = Vec::with_capacity(segs);
+    let mut t1 = theta1;
+    for _ in 0..segs {
+        let t2 = t1 + d_per;
+        let (s1, c1) = t1.sin_cos();
+        let (s2, c2) = t2.sin_cos();
+        let ep1x = cos_phi * rx * c1 - sin_phi * ry * s1 + cx;
+        let ep1y = sin_phi * rx * c1 + cos_phi * ry * s1 + cy;
+        let ep2x = cos_phi * rx * c2 - sin_phi * ry * s2 + cx;
+        let ep2y = sin_phi * rx * c2 + cos_phi * ry * s2 + cy;
+        let dx1 = -cos_phi * rx * s1 - sin_phi * ry * c1;
+        let dy1 = -sin_phi * rx * s1 + cos_phi * ry * c1;
+        let dx2 = -cos_phi * rx * s2 - sin_phi * ry * c2;
+        let dy2 = -sin_phi * rx * s2 + cos_phi * ry * c2;
+        result.push([
+            ep1x + alpha * dx1, ep1y + alpha * dy1,
+            ep2x - alpha * dx2, ep2y - alpha * dy2,
+            ep2x, ep2y,
+        ]);
+        t1 = t2;
+    }
+    result
+}
+
+/// Sample an SVG path d-string into a flat [x, y, x, y, ...] Float64Array.
+/// ctm: [a, b, c, d, e, f] affine matrix (element-local → SVG user space)
+/// Returns interleaved coordinates in page space.
+#[wasm_bindgen]
+pub fn sample_svg_path(
+    d: &str, ctm: &[f64], scale_x: f64, scale_y: f64,
+    offset_x: f64, offset_y: f64, step: f64,
+) -> js_sys::Float64Array {
+    let ctm_arr: [f64; 6] = [
+        ctm.get(0).copied().unwrap_or(1.0),
+        ctm.get(1).copied().unwrap_or(0.0),
+        ctm.get(2).copied().unwrap_or(0.0),
+        ctm.get(3).copied().unwrap_or(1.0),
+        ctm.get(4).copied().unwrap_or(0.0),
+        ctm.get(5).copied().unwrap_or(0.0),
+    ];
+    let (sx, sy, ox, oy) = (scale_x, scale_y, offset_x, offset_y);
+
+    let mut out: Vec<f64> = Vec::new();
+    let (mut cx, mut cy) = (0.0f64, 0.0f64); // current point
+    let (mut spx, mut spy) = (0.0f64, 0.0f64); // subpath start
+    let (mut prev_cx2, mut prev_cy2) = (0.0f64, 0.0f64); // previous cubic control pt
+    let (mut prev_qx1, mut prev_qy1) = (0.0f64, 0.0f64); // previous quad control pt
+    let mut had_cubic = false;
+    let mut had_quad = false;
+
+    for seg in svgtypes::PathParser::from(d).flatten() {
+        use svgtypes::PathSegment::*;
+        match seg {
+            MoveTo { abs, x, y } => {
+                let (nx, ny) = if abs { (x, y) } else { (cx + x, cy + y) };
+                cx = nx; cy = ny;
+                spx = nx; spy = ny;
+                // Emit the moveto point
+                let tx = nx * ctm_arr[0] + ny * ctm_arr[2] + ctm_arr[4];
+                let ty = nx * ctm_arr[1] + ny * ctm_arr[3] + ctm_arr[5];
+                out.push(tx * sx + ox);
+                out.push(ty * sy + oy);
+                had_cubic = false; had_quad = false;
+            }
+            LineTo { abs, x, y } => {
+                let (nx, ny) = if abs { (x, y) } else { (cx + x, cy + y) };
+                sample_line(&mut out, cx, cy, nx, ny, step, &ctm_arr, sx, sy, ox, oy);
+                cx = nx; cy = ny;
+                had_cubic = false; had_quad = false;
+            }
+            HorizontalLineTo { abs, x } => {
+                let nx = if abs { x } else { cx + x };
+                sample_line(&mut out, cx, cy, nx, cy, step, &ctm_arr, sx, sy, ox, oy);
+                cx = nx;
+                had_cubic = false; had_quad = false;
+            }
+            VerticalLineTo { abs, y } => {
+                let ny = if abs { y } else { cy + y };
+                sample_line(&mut out, cx, cy, cx, ny, step, &ctm_arr, sx, sy, ox, oy);
+                cy = ny;
+                had_cubic = false; had_quad = false;
+            }
+            CurveTo { abs, x1, y1, x2, y2, x, y } => {
+                let (ax1, ay1, ax2, ay2, ax, ay) = if abs {
+                    (x1, y1, x2, y2, x, y)
+                } else {
+                    (cx + x1, cy + y1, cx + x2, cy + y2, cx + x, cy + y)
+                };
+                sample_cubic(&mut out, cx, cy, ax1, ay1, ax2, ay2, ax, ay, step, &ctm_arr, sx, sy, ox, oy);
+                prev_cx2 = ax2; prev_cy2 = ay2;
+                cx = ax; cy = ay;
+                had_cubic = true; had_quad = false;
+            }
+            SmoothCurveTo { abs, x2, y2, x, y } => {
+                let ax1 = if had_cubic { 2.0 * cx - prev_cx2 } else { cx };
+                let ay1 = if had_cubic { 2.0 * cy - prev_cy2 } else { cy };
+                let (ax2, ay2, ax, ay) = if abs {
+                    (x2, y2, x, y)
+                } else {
+                    (cx + x2, cy + y2, cx + x, cy + y)
+                };
+                sample_cubic(&mut out, cx, cy, ax1, ay1, ax2, ay2, ax, ay, step, &ctm_arr, sx, sy, ox, oy);
+                prev_cx2 = ax2; prev_cy2 = ay2;
+                cx = ax; cy = ay;
+                had_cubic = true; had_quad = false;
+            }
+            Quadratic { abs, x1, y1, x, y } => {
+                let (ax1, ay1, ax, ay) = if abs {
+                    (x1, y1, x, y)
+                } else {
+                    (cx + x1, cy + y1, cx + x, cy + y)
+                };
+                // Elevate to cubic
+                let c1x = cx + 2.0 / 3.0 * (ax1 - cx);
+                let c1y = cy + 2.0 / 3.0 * (ay1 - cy);
+                let c2x = ax + 2.0 / 3.0 * (ax1 - ax);
+                let c2y = ay + 2.0 / 3.0 * (ay1 - ay);
+                sample_cubic(&mut out, cx, cy, c1x, c1y, c2x, c2y, ax, ay, step, &ctm_arr, sx, sy, ox, oy);
+                prev_qx1 = ax1; prev_qy1 = ay1;
+                cx = ax; cy = ay;
+                had_quad = true; had_cubic = false;
+            }
+            SmoothQuadratic { abs, x, y } => {
+                let ax1 = if had_quad { 2.0 * cx - prev_qx1 } else { cx };
+                let ay1 = if had_quad { 2.0 * cy - prev_qy1 } else { cy };
+                let (ax, ay) = if abs { (x, y) } else { (cx + x, cy + y) };
+                let c1x = cx + 2.0 / 3.0 * (ax1 - cx);
+                let c1y = cy + 2.0 / 3.0 * (ay1 - cy);
+                let c2x = ax + 2.0 / 3.0 * (ax1 - ax);
+                let c2y = ay + 2.0 / 3.0 * (ay1 - ay);
+                sample_cubic(&mut out, cx, cy, c1x, c1y, c2x, c2y, ax, ay, step, &ctm_arr, sx, sy, ox, oy);
+                prev_qx1 = ax1; prev_qy1 = ay1;
+                cx = ax; cy = ay;
+                had_quad = true; had_cubic = false;
+            }
+            EllipticalArc { abs, rx, ry, x_axis_rotation, large_arc, sweep, x, y } => {
+                let (ax, ay) = if abs { (x, y) } else { (cx + x, cy + y) };
+                let cubics = arc_to_cubics(cx, cy, rx, ry, x_axis_rotation, large_arc, sweep, ax, ay);
+                let mut px = cx;
+                let mut py = cy;
+                for c in &cubics {
+                    sample_cubic(&mut out, px, py, c[0], c[1], c[2], c[3], c[4], c[5], step, &ctm_arr, sx, sy, ox, oy);
+                    px = c[4];
+                    py = c[5];
+                }
+                cx = ax; cy = ay;
+                had_cubic = false; had_quad = false;
+            }
+            ClosePath { .. } => {
+                if (cx - spx).abs() > 0.001 || (cy - spy).abs() > 0.001 {
+                    sample_line(&mut out, cx, cy, spx, spy, step, &ctm_arr, sx, sy, ox, oy);
+                }
+                cx = spx; cy = spy;
+                had_cubic = false; had_quad = false;
+            }
+        }
+    }
+
+    let arr = js_sys::Float64Array::new_with_length(out.len() as u32);
+    arr.copy_from(&out);
+    arr
+}
+
 #[wasm_bindgen]
 pub struct AppEngine {
     zip_bytes: Vec<u8>,
