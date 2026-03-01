@@ -1592,7 +1592,9 @@ impl AppEngine {
                 new_shapes_for_page.push((stub, meta));
             } else if is_fill {
                 // Fill shape → pen_type 40 GeoJSON (device's native geometric shape format)
-                let fc = fill_color.unwrap_or(color_rgba);
+                // Use transparent color when no fill specified (stroke-only shapes)
+                let has_actual_fill = fill_color.is_some();
+                let fc = fill_color.unwrap_or((0, 0, 0, 0.0));
                 let (extra_json, matrix) = match pen_type {
                     0 => build_oval_geojson(&points, &fc, &color_rgba, thickness),
                     1 => build_rect_geojson(&points, &fc, &color_rgba, thickness),
@@ -1603,7 +1605,7 @@ impl AppEngine {
                     pen_type: 40,
                     thickness,
                     color_rgba,
-                    fill_color: Some(fc), // Always set fillColor — required for device to render fills
+                    fill_color: if has_actual_fill { Some(fc) } else { None },
                     extra_json: Some(extra_json),
                     matrix: Some(matrix),
                     page_id: Some(page_id.clone()),

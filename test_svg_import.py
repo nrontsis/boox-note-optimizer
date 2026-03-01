@@ -271,8 +271,12 @@ def run_tests(names: list[tuple[str, str]], out_dir: Path) -> list[dict]:
                 imp_img = data_url_to_image(imp_result["url"])
                 W, H = imp_result["width"], imp_result["height"]
 
-                # Get bbox for reference renderer positioning
+                # Use the same bbox that the import used
+                import_bbox = page.evaluate("() => window._lastSvgBBox")
                 bbox = get_svg_bbox(page, svg_text)
+                if import_bbox and bbox and (abs(import_bbox['width'] - bbox['width']) > 1 or abs(import_bbox['height'] - bbox['height']) > 1):
+                    print(f" BBOX MISMATCH: import={import_bbox}, ref={bbox}", end="")
+                    bbox = import_bbox
 
                 try:
                     ref_url = render_svg_reference(page, svg_text, W, H, bbox)

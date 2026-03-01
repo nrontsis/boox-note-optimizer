@@ -301,9 +301,19 @@
                 </div>
 
                 <div class="max-w-sm w-full px-4 pb-2 md:pb-4">
-                    <div class="bg-blue-50 p-3 md:p-4 rounded-xl border border-blue-100 text-[11px] md:text-xs text-blue-900 leading-relaxed space-y-2">
-                        <p><b>Pro Tip:</b> Install the <a href="https://github.com/nrontsis/boox-note-optimizer/releases" target="_blank" class="underline font-semibold">Android APK</a> on your Boox to share files directly from Notes and open results in one tap.</p>
-                        <p>Or get your .note files manually: in Notes, long-press a notebook &rarr; <b>Share and Export</b> &rarr; <b>Export to local (.note)</b>.</p>
+                    <div class="bg-blue-50 p-3 md:p-4 rounded-xl border border-blue-100 text-[11px] md:text-xs text-blue-900 leading-relaxed space-y-3">
+                        <div>
+                            <p class="font-bold mb-1 text-sm">How to get your .note file:</p>
+                            <ol class="list-decimal ml-4 space-y-1">
+                                <li>Open your Boox <b>Notes</b> app.</li>
+                                <li>Long-press a notebook &rarr; <b>Share and Export</b>.</li>
+                                <li>Choose <b>.note</b> format and click <b>Export</b>.</li>
+                                <li>Tap the upload box above and find your file in the <b>note</b> or <b>Storage</b> folder.</li>
+                            </ol>
+                        </div>
+                        <div class="pt-2 border-t border-blue-200/60">
+                            <p>⚡ <b>Pro Tip:</b> Install the <a href="https://github.com/nrontsis/boox-note-optimizer/releases" target="_blank" class="underline font-semibold hover:text-blue-700 transition">Android APK</a> on your Boox to bypass these steps and share files directly in one tap.</p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1118,6 +1128,18 @@
                 });
             }
 
+            // Compute corrected CTM: maps element-local coords to SVG user space
+            // (stripping the viewBox→viewport mapping). getCTM() includes the viewBox
+            // mapping which adds scale+translate when viewBox doesn't match width/height.
+            // Using getScreenCTM to factor it out: svgScreen^-1 * elScreen = elementTransformOnly.
+            const svgScreenInv = svgEl.getScreenCTM()?.inverse();
+            function correctedCTM(el) {
+                if (!svgScreenInv) return el.getCTM();
+                const s = el.getScreenCTM();
+                if (!s) return el.getCTM();
+                return svgScreenInv.multiply(s);
+            }
+
             // Collect text elements as native .note text boxes (pen_type 16).
             // NOTE: Use native .note features (text boxes, geometric shapes) instead of
             // converting everything to strokes. The .note format has built-in support for
@@ -1127,7 +1149,7 @@
                 const bbox = textEl.getBBox();
                 if (bbox.width === 0 || bbox.height === 0) return;
                 const style = window.getComputedStyle(textEl);
-                const ctm = textEl.getCTM();
+                const ctm = correctedCTM(textEl);
                 const fill = style.fill && style.fill !== 'none' ? style.fill : 'black';
                 const text = textEl.textContent.trim();
                 if (!text) return;
@@ -1145,6 +1167,7 @@
             let scaleX = 1, scaleY = 1, offsetX = 0, offsetY = 0;
             try {
                 const bbox = svgEl.getBBox();
+                window._lastSvgBBox = bbox ? { x: bbox.x, y: bbox.y, width: bbox.width, height: bbox.height } : null;
                 if (bbox && bbox.width > 0 && bbox.height > 0) {
                     const padding = 100;
                     const maxDim = 2480;
@@ -1176,11 +1199,39 @@
             // continuously, creating unwanted connecting lines between them.
             // For evenodd paths: preprocess into separate fills so the device
             // renderer doesn't need evenodd support (outer=fill, inner=white).
+
+            // Fix relative 'm' commands when splitting subpaths: after a 'z',
+            // the current point returns to the subpath start. A relative 'm'
+            // in the next subpath is relative to that point, but as a standalone
+            // path it would be relative to (0,0). Convert to absolute 'M'.
+            function absolutizeSubpaths(subpaths) {
+                let startX = 0, startY = 0;
+                return subpaths.map(sub => {
+                    const trimmed = sub.trim();
+                    const cmd = trimmed[0];
+                    const rest = trimmed.slice(1).trimStart();
+                    const numRe = /(-?[\d]*\.?\d+(?:[eE][+-]?\d+)?)/g;
+                    const n1 = numRe.exec(rest), n2 = numRe.exec(rest);
+                    if (!n1 || !n2) return trimmed;
+                    const mx = parseFloat(n1[0]), my = parseFloat(n2[0]);
+                    if (cmd === 'm') {
+                        const absX = startX + mx, absY = startY + my;
+                        startX = absX; startY = absY;
+                        const afterXY = rest.slice(n2.index + n2[0].length);
+                        return 'M' + absX + ' ' + absY + (afterXY.trim() ? ' l' + afterXY : '');
+                    } else {
+                        startX = mx; startY = my;
+                        return trimmed;
+                    }
+                });
+            }
+
             svgEl.querySelectorAll('path').forEach(path => {
                 const d = path.getAttribute('d');
                 if (!d) return;
-                const subpaths = d.match(/[Mm][^Mm]*/g);
+                let subpaths = d.match(/[Mm][^Mm]*/g);
                 if (!subpaths || subpaths.length <= 1) return;
+                subpaths = absolutizeSubpaths(subpaths);
 
                 const fr = path.getAttribute('fill-rule') || window.getComputedStyle(path).fillRule;
                 if (fr === 'evenodd') {
@@ -1261,15 +1312,14 @@
                     x1 = (b.x + b.width) * m.a + (b.y + b.height) * m.c + m.e;
                     y1 = (b.x + b.width) * m.b + (b.y + b.height) * m.d + m.f;
                 }
-                // Apply import scaling. Use generous width to prevent word-wrap:
-                // getBBox is tight to the rendered glyphs, but .note uses sans-serif
-                // which may differ from SVG's font.
+                // Apply import scaling with padding for font differences
+                // (getBBox is tight to rendered glyphs, .note uses sans-serif)
                 const top = y0 * scaleY + offsetY;
                 const bottom = y1 * scaleY + offsetY;
-                const cx = ((x0 + x1) / 2) * scaleX + offsetX; // center of text
-                const halfW = (x1 - x0) * scaleX; // generous: 2x original width
-                const left = cx - halfW;
-                const right = cx + halfW;
+                const textW = (x1 - x0) * scaleX;
+                const pad = textW * 0.3;
+                const left = x0 * scaleX + offsetX - pad / 2;
+                const right = x1 * scaleX + offsetX + textW + pad / 2;
                 const fontSize = info.fontSize * scaleY;
                 const fillColor = parseColor(info.fill);
                 const textStyle = JSON.stringify({
@@ -1301,7 +1351,7 @@
             svgEl.querySelectorAll('path, rect, circle, ellipse, line').forEach(el => {
                 const tag = el.tagName.toLowerCase();
                 const style = window.getComputedStyle(el);
-                const ctm = el.getCTM();
+                const ctm = correctedCTM(el);
                 const rawStroke = el.getAttribute('stroke') || style.stroke;
                 const rawFill = el.getAttribute('fill');
                 const effectiveFill = rawFill !== null ? rawFill : (style.fill || 'black');
@@ -1311,6 +1361,8 @@
 
                 if (tag === 'path') {
                     // Path: sample points along the path
+                    // TODO: optimize speed up with multithreading/rust or adaptive sampling (hopefully avoided)
+                    // to speed up complex SVGs 
                     const len = el.getTotalLength();
                     if (len === 0) return;
                     const pts = [];
