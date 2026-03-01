@@ -26,7 +26,17 @@
                     });
                 });
             } else {
-                navigator.serviceWorker.register('sw.js');
+                navigator.serviceWorker.register('sw.js').then(reg => {
+                    reg.addEventListener('updatefound', () => {
+                        const nw = reg.installing;
+                        if (!nw) return;
+                        nw.addEventListener('statechange', () => {
+                            if (nw.state === 'activated' && navigator.serviceWorker.controller) {
+                                location.reload();
+                            }
+                        });
+                    });
+                });
             }
         }
     </script>
