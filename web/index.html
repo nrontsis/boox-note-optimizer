@@ -1154,13 +1154,25 @@
                 textInfos.push({ bbox, ctm, fill, text, fontSize, bold, italic, align });
             });
 
-            // Resize the .note canvas to match the SVG's aspect ratio.
-            // Uses generous padding to prevent strokes from being clipped at edges
-            // (getBBox excludes stroke widths, so strokes extend beyond the bbox).
+            // Resize the .note canvas to match the SVG's coordinate space.
+            // Prefer viewBox (defines intended coordinate system) over getBBox
+            // (tight content bounds) for sizing — getBBox gives wrong dimensions
+            // when content doesn't fill the full viewBox.
             let scaleX = 1, scaleY = 1, offsetX = 0, offsetY = 0;
             try {
-                const bbox = svgEl.getBBox();
-                window._lastSvgBBox = bbox ? { x: bbox.x, y: bbox.y, width: bbox.width, height: bbox.height } : null;
+                // Use viewBox if available, fall back to getBBox for content bounds
+                let bbox;
+                const vb = svgEl.getAttribute('viewBox');
+                if (vb) {
+                    const parts = vb.trim().split(/[\s,]+/).map(Number);
+                    if (parts.length === 4 && parts[2] > 0 && parts[3] > 0)
+                        bbox = { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
+                }
+                if (!bbox) {
+                    const gb = svgEl.getBBox();
+                    bbox = gb ? { x: gb.x, y: gb.y, width: gb.width, height: gb.height } : null;
+                }
+                window._lastSvgBBox = bbox;
                 if (bbox && bbox.width > 0 && bbox.height > 0) {
                     const padding = 100;
                     const maxDim = 2480;
@@ -2034,11 +2046,14 @@
             // gives a fresh gesture activation, needed by Safari for clipboard + window.open.
             if (!await styledConfirm("This will open a drawing editor in a new tab and copy the SVG to your clipboard.\n\nOnce the empty online editor opens, click File \u2192 New From Clipboard (or Cmd+V / Ctrl+V).\n\nYou can also download the SVG and open it in any online or desktop editor (e.g. Inkscape).")) return;
 
-            // Both must be called synchronously within the confirm gesture —
-            // any await before these would expire Safari's user activation.
-            const svgBlobPromise = generateSVG().then(svg => new Blob([svg], {type: 'text/plain'}));
-            navigator.clipboard.write([new ClipboardItem({'text/plain': svgBlobPromise})]);
+            // Open editor first (needs user activation for popup), then clipboard.
             window.open('https://boxy-svg.com/app', '_blank');
+            try {
+                const svg = await generateSVG();
+                await navigator.clipboard.writeText(svg);
+            } catch(e) {
+                alert('Could not copy SVG to clipboard: ' + e.message + '\n\nYou can use the Download SVG button instead.');
+            }
         };
 
         })().catch(function(err) {
