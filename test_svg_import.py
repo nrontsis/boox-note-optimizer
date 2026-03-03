@@ -271,6 +271,21 @@ def run_tests(names: list[tuple[str, str]], out_dir: Path) -> list[dict]:
                 imp_img = data_url_to_image(imp_result["url"])
                 W, H = imp_result["width"], imp_result["height"]
 
+                # Canvas dims round-trip check: export .note, reload, verify dims match
+                dims_ok = True
+                try:
+                    note_b64 = page.evaluate("() => window._testExportNote()")
+                    if note_b64:
+                        rt_dims = page.evaluate(
+                            "async (b64) => await window._testReloadNote(b64)",
+                            note_b64)
+                        if abs(rt_dims["width"] - W) > 1 or abs(rt_dims["height"] - H) > 1:
+                            print(f" DIMS MISMATCH: import={W}x{H}, .note={rt_dims['width']}x{rt_dims['height']}", end="")
+                            dims_ok = False
+                except Exception as e:
+                    print(f" dims check error: {e}", end="")
+                    dims_ok = False
+
                 # Use the same bbox that the import used
                 import_bbox = page.evaluate("() => window._lastSvgBBox")
                 bbox = get_svg_bbox(page, svg_text)
@@ -294,10 +309,13 @@ def run_tests(names: list[tuple[str, str]], out_dir: Path) -> list[dict]:
                 metrics["name"] = name
                 metrics["difficulty"] = difficulty
                 metrics["status"] = "ok"
+                metrics["dims_ok"] = dims_ok
 
                 save_comparison(out_dir, name, ref_img, imp_img, metrics)
 
-                status = "PASS" if metrics["mae"] < 15 else "WARN" if metrics["mae"] < 30 else "FAIL"
+                status = "PASS" if metrics["mae"] < 15 and dims_ok else "WARN" if metrics["mae"] < 30 else "FAIL"
+                if not dims_ok:
+                    status = "FAIL(dims)"
                 print(f" MAE={metrics['mae']:.1f}, "
                       f"content={metrics['content_ratio']:.2f}x → {status}")
 

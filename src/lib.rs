@@ -1228,6 +1228,31 @@ fn patch_virtual_page_bytes(data: &[u8], canvas_w: f32, canvas_h: f32) -> Vec<u8
     result
 }
 
+/// Patch pageModel/pb: multiple concatenated field-1 messages, each with a rect at field 7.
+fn patch_page_model_bytes(data: &[u8], canvas_w: f32, canvas_h: f32) -> Vec<u8> {
+    let mut result = Vec::new();
+    let mut off = 0;
+    while off < data.len() {
+        let tag = decode_var(data, &mut off);
+        if (tag >> 3) != 1 || (tag & 7) != 2 { break; }
+        let inner_len = decode_var(data, &mut off) as usize;
+        if off + inner_len > data.len() { break; }
+        let inner = &data[off..off + inner_len];
+        off += inner_len;
+
+        let patched_inner = patch_protobuf_json_fields(inner, &|fn_num, v| {
+            if fn_num == 7 {
+                patch_page_rect(v, canvas_w, canvas_h);
+            }
+        });
+
+        encode_varint(&mut result, tag);
+        encode_varint(&mut result, patched_inner.len() as u64);
+        result.extend_from_slice(&patched_inner);
+    }
+    result
+}
+
 /// Patch note_info protobuf to set blank template and correct page dimensions.
 /// Structure: outer field 1 (message) -> inner fields 12 (page config JSON), 13 (background JSON)
 fn patch_note_info_bytes(data: &[u8], canvas_w: f32, canvas_h: f32) -> Vec<u8> {
@@ -1295,6 +1320,12 @@ fn patch_note_info_bytes(data: &[u8], canvas_w: f32, canvas_h: f32) -> Vec<u8> {
             }
             // Fallback: copy original
             patched_inner.extend_from_slice(&inner[field_start..ioff]);
+        } else if (ifn == 22 || ifn == 23) && iwt == 5 {
+            // Patch canvas width (field 22) and height (field 23) as f32
+            ioff += 4; // skip original value
+            let val = if ifn == 22 { canvas_w } else { canvas_h };
+            encode_varint(&mut patched_inner, itag);
+            patched_inner.extend_from_slice(&val.to_le_bytes());
         } else {
             // Copy other fields verbatim
             match iwt {
@@ -3279,6 +3310,13 @@ impl AppEngine {
                     let mut b = Vec::new();
                     if f.read_to_end(&mut b).is_ok() {
                         let patched = patch_virtual_page_bytes(&b, self.canvas_w, self.canvas_h);
+                        wr.write_all(&patched).unwrap();
+                    }
+                } else if has_svg_import && name.contains("pageModel/pb/") {
+                    // Patch pageModel/pb: page rects in all concatenated field-1 messages
+                    let mut b = Vec::new();
+                    if f.read_to_end(&mut b).is_ok() {
+                        let patched = patch_page_model_bytes(&b, self.canvas_w, self.canvas_h);
                         wr.write_all(&patched).unwrap();
                     }
                 } else if has_svg_import && name.contains("template_json") {

@@ -1154,13 +1154,11 @@
                 textInfos.push({ bbox, ctm, fill, text, fontSize, bold, italic, align });
             });
 
-            // Resize the .note canvas to match the SVG's coordinate space.
-            // Prefer viewBox (defines intended coordinate system) over getBBox
-            // (tight content bounds) for sizing — getBBox gives wrong dimensions
-            // when content doesn't fill the full viewBox.
+            // Set .note canvas from SVG's viewBox (or getBBox fallback).
+            // viewBox defines the SVG's coordinate space, so using it for both
+            // canvas sizing and transform ensures round-tripping preserves dims.
             let scaleX = 1, scaleY = 1, offsetX = 0, offsetY = 0;
             try {
-                // Use viewBox if available, fall back to getBBox for content bounds
                 let bbox;
                 const vb = svgEl.getAttribute('viewBox');
                 if (vb) {
@@ -1533,6 +1531,13 @@
             for (let i = 0; i < exported.length; i += 8192)
                 s += String.fromCharCode.apply(null, exported.subarray(i, i + 8192));
             return btoa(s);
+        };
+        window._testReloadNote = async (b64) => {
+            const bin = atob(b64);
+            const arr = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+            await loadBuffer(arr);
+            return { width: app.get_canvas_width(), height: app.get_canvas_height() };
         };
 
         const loadFile = async (file) => {
@@ -2046,14 +2051,14 @@
             // gives a fresh gesture activation, needed by Safari for clipboard + window.open.
             if (!await styledConfirm("This will open a drawing editor in a new tab and copy the SVG to your clipboard.\n\nOnce the empty online editor opens, click File \u2192 New From Clipboard (or Cmd+V / Ctrl+V).\n\nYou can also download the SVG and open it in any online or desktop editor (e.g. Inkscape).")) return;
 
-            // Open editor first (needs user activation for popup), then clipboard.
-            window.open('https://boxy-svg.com/app', '_blank');
+            // Copy first (while page has focus), then open editor tab.
             try {
                 const svg = await generateSVG();
                 await navigator.clipboard.writeText(svg);
             } catch(e) {
                 alert('Could not copy SVG to clipboard: ' + e.message + '\n\nYou can use the Download SVG button instead.');
             }
+            window.open('https://boxy-svg.com/app', '_blank');
         };
 
         })().catch(function(err) {

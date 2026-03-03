@@ -1,7 +1,33 @@
 /target
 /pkg
 *.wasm*
-CLAUDE.md
+CLAUDE*
 localdata
+
+# Binary / data
 *.png
 *.note
+*.note.bak
+*.npz
+*.apk
+*.svg
+*.pdf
+
+# Python
+__pycache__/
+*.py
+pyproject.toml
+uv.lock
+
+# OCR / scratch
+ocr_*
+work_*
+
+# Test / reference data
+gold-pairs/
+manifest-checksum.txt
+
+# Misc
+web/boox_optimizer.js
+*.json
+!web/manifest.json
