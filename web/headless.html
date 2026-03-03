@@ -101,12 +101,30 @@ window.getPageCount = (b64) => {
     app.free();
     return n;
 };
+window.exportSVG = async (b64, pageIdx) => {
+    const { SVGTracker, createSVGProxy } = await import('./svg-tracker.js');
+    const binary = atob(b64);
+    const u8 = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) u8[i] = binary.charCodeAt(i);
+    const app = new AppEngine(u8);
+    try { await app.load_images(); } catch(e) { console.warn('load_images:', e); }
+    const w = app.get_canvas_width() || 1860;
+    const h = app.get_canvas_height() || 2480;
+    const tmp = document.createElement('canvas');
+    tmp.width = w; tmp.height = h;
+    const tracker = new SVGTracker(w, h);
+    createSVGProxy(tmp, tracker);
+    app.render_page_svg(tmp, true, pageIdx || 0);
+    const svg = await tracker.getSVG();
+    app.free();
+    return svg;
+};
 window.testSvgExport = (emptyB64, svgStrokesJson) => {
     const binary = atob(emptyB64);
     const u8 = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) u8[i] = binary.charCodeAt(i);
     const app = new AppEngine(u8);
-    app.add_svg_strokes(0, svgStrokesJson);
+    app.add_svg_strokes(0, svgStrokesJson, 0);
     const exported = app.export();
     const b64out = btoa(String.fromCharCode(...exported));
     app.free();

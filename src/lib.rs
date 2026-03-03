@@ -1065,9 +1065,9 @@ fn build_shape_protobuf(
         encode_varint(&mut inner, (5 << 3) | 5);
         inner.extend_from_slice(&meta.thickness.to_le_bytes());
 
-        // Field 8: matrix (for pen_type 40 geometric shapes)
+        // Field 8: matrix (for pen_type 40 geometric shapes and pen_type 37 scanline fills)
         if let Some(m) = &meta.matrix {
-            if meta.pen_type == 40 {
+            if meta.pen_type == 40 || meta.pen_type == 37 {
                 let matrix_json = format!(
                     r#"{{"values":[{},{},{},{},{},{},0.0,0.0,1.0]}}"#,
                     m[0], m[1], m[2], m[3], m[4], m[5]
@@ -1743,6 +1743,7 @@ pub struct AppEngine {
 impl AppEngine {
     #[wasm_bindgen(constructor)]
     pub fn new(zip_bytes: &[u8]) -> Result<AppEngine, JsValue> {
+        console_error_panic_hook::set_once();
         let nf = NoteFile::open(zip_bytes).map_err(|e| JsValue::from_str(&e))?;
         Ok(AppEngine {
             zip_bytes: zip_bytes.to_vec(), deb_notes: nf.notes.clone(), notes: nf.notes,
@@ -1776,7 +1777,7 @@ impl AppEngine {
         }
     }
 
-    pub fn add_svg_strokes(&mut self, page_idx: usize, json_str: &str) -> Result<(), JsValue> {
+    pub fn add_svg_strokes(&mut self, page_idx: usize, json_str: &str, z_offset: u32) -> Result<(), JsValue> {
         if page_idx >= self.notes.len() {
             return Err(JsValue::from_str("Invalid page index"));
         }
@@ -1876,8 +1877,8 @@ impl AppEngine {
                     text: Some(text_content),
                     text_style,
                     page_id: Some(page_id.clone()),
-                    created_ts: now + i as u64,
-                    zorder: now + i as u64,
+                    created_ts: now + z_offset as u64 + i as u64,
+                    zorder: now + z_offset as u64 + i as u64,
                     ..Default::default()
                 };
                 self.shape_meta.insert(uuid.clone(), meta.clone());
@@ -1901,8 +1902,8 @@ impl AppEngine {
                     extra_json: Some(extra_json),
                     matrix: Some(matrix),
                     page_id: Some(page_id.clone()),
-                    created_ts: now + i as u64,
-                    zorder: now + i as u64,
+                    created_ts: now + z_offset as u64 + i as u64,
+                    zorder: now + z_offset as u64 + i as u64,
                     ..Default::default()
                 };
                 self.shape_meta.insert(uuid.clone(), meta.clone());
@@ -1915,9 +1916,12 @@ impl AppEngine {
                     pen_type,
                     thickness,
                     color_rgba,
+                    fill_color: fill_color,
                     page_id: Some(page_id.clone()),
-                    created_ts: now + i as u64,
-                    zorder: now + i as u64,
+                    created_ts: now + z_offset as u64 + i as u64,
+                    zorder: now + z_offset as u64 + i as u64,
+                    // pen_type 37 (scanline fill) needs identity matrix for page-space coords
+                    matrix: if pen_type == 37 { Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]) } else { None },
                     ..Default::default()
                 };
                 self.shape_meta.insert(uuid.clone(), meta.clone());
@@ -1990,6 +1994,14 @@ impl AppEngine {
     pub fn get_page_count(&self) -> usize { self.pages.len() }
 
     pub fn render_page(&mut self, canvas: &HtmlCanvasElement, use_deb: bool, page_idx: usize) {
+        self.render_page_inner(canvas, use_deb, page_idx, false);
+    }
+
+    pub fn render_page_svg(&mut self, canvas: &HtmlCanvasElement, use_deb: bool, page_idx: usize) {
+        self.render_page_inner(canvas, use_deb, page_idx, true);
+    }
+
+    fn render_page_inner(&mut self, canvas: &HtmlCanvasElement, use_deb: bool, page_idx: usize, svg_mode: bool) {
         let ctx = canvas.get_context("2d").unwrap().unwrap().dyn_into::<CanvasRenderingContext2d>().unwrap();
         ctx.clear_rect(0.0, 0.0, self.canvas_w as f64, self.canvas_h as f64);
         ctx.set_fill_style_str("#ffffff");
@@ -2115,7 +2127,7 @@ impl AppEngine {
                         continue;
                     }
 
-                    Self::render_stroke(&ctx, stroke, &meta);
+                    Self::render_stroke(&ctx, stroke, &meta, svg_mode);
                 }
             }
         }
@@ -2957,7 +2969,7 @@ impl AppEngine {
         ctx.stroke();
     }
 
-    fn render_stroke(ctx: &CanvasRenderingContext2d, stroke: &Stroke, meta: &ShapeMeta) {
+    fn render_stroke(ctx: &CanvasRenderingContext2d, stroke: &Stroke, meta: &ShapeMeta, svg_mode: bool) {
         ctx.save();
         ctx.set_global_alpha(meta.color_rgba.3 as f64);
         if meta.pen_type == 15 {
@@ -2979,11 +2991,20 @@ impl AppEngine {
         match meta.pen_type {
             5 | 21 => { // Fountain & nBrush
                 let is_fountain = meta.pen_type == 5;
-                for i in 0..pts.len() - 1 {
-                    let w1 = (if is_fountain { meta.thickness * 1.37 * (pts[i][2]/4095.0).powf(0.59) } else { 2.07 * meta.thickness * (pts[i][2]/4095.0).powf(0.49) + 1.21 }).max(0.5);
-                    let w2 = (if is_fountain { meta.thickness * 1.37 * (pts[i+1][2]/4095.0).powf(0.59) } else { 2.07 * meta.thickness * (pts[i+1][2]/4095.0).powf(0.49) + 1.21 }).max(0.5);
-                    ctx.begin_path(); ctx.set_line_width(((w1 + w2) / 2.0) as f64);
-                    ctx.move_to(pts[i][0] as f64, pts[i][1] as f64); ctx.line_to(pts[i+1][0] as f64, pts[i+1][1] as f64); ctx.stroke();
+                if svg_mode {
+                    let n = pts.len();
+                    let half_w: Vec<f32> = (0..n).map(|i| {
+                        let w = (if is_fountain { meta.thickness * 1.37 * (pts[i][2]/4095.0).powf(0.59) } else { 2.07 * meta.thickness * (pts[i][2]/4095.0).powf(0.49) + 1.21 }).max(0.5);
+                        w / 2.0
+                    }).collect();
+                    Self::fill_stroke_outline(&ctx, &pts, &half_w);
+                } else {
+                    for i in 0..pts.len() - 1 {
+                        let w1 = (if is_fountain { meta.thickness * 1.37 * (pts[i][2]/4095.0).powf(0.59) } else { 2.07 * meta.thickness * (pts[i][2]/4095.0).powf(0.49) + 1.21 }).max(0.5);
+                        let w2 = (if is_fountain { meta.thickness * 1.37 * (pts[i+1][2]/4095.0).powf(0.59) } else { 2.07 * meta.thickness * (pts[i+1][2]/4095.0).powf(0.49) + 1.21 }).max(0.5);
+                        ctx.begin_path(); ctx.set_line_width(((w1 + w2) / 2.0) as f64);
+                        ctx.move_to(pts[i][0] as f64, pts[i][1] as f64); ctx.line_to(pts[i+1][0] as f64, pts[i+1][1] as f64); ctx.stroke();
+                    }
                 }
             },
             60 | 61 => { // Calligraphy Brushes
@@ -3048,25 +3069,77 @@ impl AppEngine {
 
                 let sw = meta.thickness as f64;
                 ctx.set_line_width(sw);
-                for i in 0..pairs {
-                    let x = raw[i * 2][0];
-                    let y = raw[i * 2][1];
-                    let w = raw[i * 2 + 1][0] - x;
-                    let h = raw[i * 2 + 1][1] - y;
-
-                    let tl = xf(x, y);
-                    let tr = xf(x + w, y);
-                    let br = xf(x + w, y + h);
-                    let bl = xf(x, y + h);
-
-                    ctx.begin_path();
-                    ctx.move_to(tl.0, tl.1);
-                    ctx.line_to(tr.0, tr.1);
-                    ctx.line_to(br.0, br.1);
-                    ctx.line_to(bl.0, bl.1);
-                    ctx.close_path();
-                    ctx.fill();
-                    if sw > 0.0 { ctx.stroke(); }
+                if svg_mode {
+                    // Batch all quads into a single filled path for SVG (skip stroke).
+                    // Use ctx.rect() for axis-aligned rects (identity/scale-only matrix)
+                    // and manual quads otherwise. Merge vertically adjacent rects
+                    // sharing the same x-span to reduce element count.
+                    let is_axis_aligned = (mat[1].abs() < 1e-6) && (mat[3].abs() < 1e-6);
+                    if is_axis_aligned {
+                        // Collect all rects transformed, then merge adjacent ones
+                        let mut rects: Vec<(f64, f64, f64, f64)> = Vec::with_capacity(pairs);
+                        for i in 0..pairs {
+                            let x = raw[i * 2][0];
+                            let y = raw[i * 2][1];
+                            let w = raw[i * 2 + 1][0] - x;
+                            let h = raw[i * 2 + 1][1] - y;
+                            let (tx, ty) = xf(x, y);
+                            let (tx2, ty2) = xf(x + w, y + h);
+                            rects.push((tx.round(), ty.round(), (tx2 - tx).round(), (ty2 - ty).round()));
+                        }
+                        // Sort by x then y for merge
+                        rects.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap()));
+                        // Merge rects with same x,w where one's bottom touches another's top
+                        let mut merged: Vec<(f64, f64, f64, f64)> = Vec::new();
+                        for r in rects {
+                            if let Some(last) = merged.last_mut() {
+                                if (last.0 - r.0).abs() < 0.5 && (last.2 - r.2).abs() < 0.5
+                                    && ((last.1 + last.3) - r.1).abs() < 0.5 {
+                                    last.3 += r.3;
+                                    continue;
+                                }
+                            }
+                            merged.push(r);
+                        }
+                        ctx.begin_path();
+                        for (rx, ry, rw, rh) in &merged {
+                            ctx.rect(*rx, *ry, *rw, *rh);
+                        }
+                        ctx.fill();
+                    } else {
+                        ctx.begin_path();
+                        for i in 0..pairs {
+                            let x = raw[i * 2][0];
+                            let y = raw[i * 2][1];
+                            let w = raw[i * 2 + 1][0] - x;
+                            let h = raw[i * 2 + 1][1] - y;
+                            let tl = xf(x, y); let tr = xf(x + w, y);
+                            let br = xf(x + w, y + h); let bl = xf(x, y + h);
+                            ctx.move_to(tl.0, tl.1);
+                            ctx.line_to(tr.0, tr.1);
+                            ctx.line_to(br.0, br.1);
+                            ctx.line_to(bl.0, bl.1);
+                            ctx.close_path();
+                        }
+                        ctx.fill();
+                    }
+                } else {
+                    for i in 0..pairs {
+                        let x = raw[i * 2][0];
+                        let y = raw[i * 2][1];
+                        let w = raw[i * 2 + 1][0] - x;
+                        let h = raw[i * 2 + 1][1] - y;
+                        let tl = xf(x, y); let tr = xf(x + w, y);
+                        let br = xf(x + w, y + h); let bl = xf(x, y + h);
+                        ctx.begin_path();
+                        ctx.move_to(tl.0, tl.1);
+                        ctx.line_to(tr.0, tr.1);
+                        ctx.line_to(br.0, br.1);
+                        ctx.line_to(bl.0, bl.1);
+                        ctx.close_path();
+                        ctx.fill();
+                        if sw > 0.0 { ctx.stroke(); }
+                    }
                 }
             },
             _ => { // Ballpoint / Highlight
