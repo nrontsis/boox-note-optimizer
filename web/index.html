@@ -2031,7 +2031,7 @@
                 downloadUrl(URL.createObjectURL(blob), outName);
             } catch (e) {
                 console.error(e);
-                alert("SVG Export failed.");
+                alert("SVG Export failed: " + e.message);
             } finally {
                 ui.btnOptSvg.innerHTML = ogHTML;
                 ui.btnOptSvg.disabled = false;
